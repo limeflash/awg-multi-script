@@ -46,7 +46,7 @@ bash <(curl -s https://raw.githubusercontent.com/pumbaX/awg-multi-script/main/aw
 
 ```
 ╔══════════════════════════════════════════════╗
-║        AmneziaWG 2.0 Manager                 ║
+║                AmneziaWG 2.0 Manager                 ║
 ╚══════════════════════════════════════════════╝
   IP сервера : 1.2.3.4
   Порт       : 47300
