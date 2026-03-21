@@ -60,7 +60,7 @@ show_header() {
   local ip port st clients
   IFS='|' read -r ip port st clients <<< "$s"
   echo -e "${B}╔══════════════════════════════════════════════╗${N}"
-  echo -e "${B}║${W}        AmneziaWG 2.0 Manager                ${B}║${N}"
+  echo -e "${B}║${W}         AmneziaWG 2.0 Manager                ${B}║${N}"
   echo -e "${B}╚══════════════════════════════════════════════╝${N}"
   echo -e "${B}  IP сервера : ${W}$ip${N}"
   echo -e "${B}  Порт       : ${W}$port${N}"
