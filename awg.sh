@@ -237,7 +237,7 @@ do_install() {
     net-tools curl ufw iptables qrencode </dev/null
 
   hdr "=== Kernel headers ==="
-  apt-get install -y -q linux-headers-$(uname -r) 2>/dev/null || \
+  apt-get install -y -q "linux-headers-$(uname -r)" 2>/dev/null || \
   apt-get install -y -q linux-headers-generic || \
   { err "не удалось установить linux-headers"; exit 1; }
 
@@ -246,9 +246,11 @@ do_install() {
   apt-get update -q
   apt-get install -y -q amneziawg amneziawg-tools
 
-  command -v awg &>/dev/null \
-    && ok "amneziawg-tools: $(awg --version)" \
-    || { err "awg не найден после установки"; exit 1; }
+  if command -v awg &>/dev/null; then
+    ok "amneziawg-tools: $(awg --version)"
+  else
+    err "awg не найден после установки"; exit 1
+  fi
 
   hdr "=== Проверка модуля ==="
   if modprobe amneziawg; then
@@ -313,7 +315,8 @@ do_gen() {
   command -v awg &>/dev/null || { err "awg не найден. Сначала пункт 1"; return 1; }
 
   # Backup
-  local bak_ts="${SERVER_CONF}.bak.$(date +%s)"
+  local bak_ts
+  bak_ts="${SERVER_CONF}.bak.$(date +%s)"
   [[ -f "$SERVER_CONF" ]] && cp "$SERVER_CONF" "$bak_ts" && info "Backup: $bak_ts"
 
   choose_awg_version
@@ -654,8 +657,7 @@ do_show_qr() {
     [[ -f "$f" ]] && found+=("$f")
   done
   local unique
-  IFS=$'\n' unique=($(printf "%s\n" "${found[@]}" | sort -u))
-  unset IFS
+  mapfile -t unique < <(printf "%s\n" "${found[@]}" | sort -u)
 
   [[ ${#unique[@]} -eq 0 ]] && { err "конфиги клиентов не найдены в /root/"; return 1; }
 
