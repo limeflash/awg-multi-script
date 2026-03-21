@@ -5,7 +5,8 @@
 ## Быстрый старт
 
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/pumbaX/awg-multi-script/main/awg.sh)
+curl -s https://raw.githubusercontent.com/pumbaX/awg-multi-script/main/awg.sh -o /tmp/awg.sh
+sudo bash /tmp/awg.sh
 ```
 
 ## Описание
