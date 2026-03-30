@@ -97,7 +97,7 @@ show_header() {
   s=$(get_status)
   IFS='|' read -r ip port st clients <<< "$s"
   echo -e "${B}╔══════════════════════════════════════════════╗${N}"
-  echo -e "${B}║${W}        AmneziaWG Manager v3.2                ${B}║${N}"
+  echo -e "${B}║${W}        AmneziaWG Manager v3.3                ${B}║${N}"
   echo -e "${B}╚══════════════════════════════════════════════╝${N}"
   echo -e "${B}  IP сервера : ${W}$ip${N}"
   echo -e "${B}  Порт       : ${W}$port${N}"
@@ -247,68 +247,62 @@ fetch_i1_from_api() {
   local api_url="https://junk.web2core.workers.dev/signature?domain=${domain}"
   local api_resp i1_val=""
 
-  log_info "fetch_i1_from_api: domain=$domain url=$api_url"
+  log_info "fetch_i1_from_api: domain=$domain"
 
-  # Шаг 1: curl
   api_resp=$(curl -s --connect-timeout 10 "$api_url" 2>/dev/null) || api_resp=""
   log_debug "API raw response (first 200): ${api_resp:0:200}"
 
   if [[ -n "$api_resp" ]]; then
-    # Шаг 2: python3 JSON парсинг
     i1_val=$(echo "$api_resp" | python3 -c \
       "import sys,json; d=json.load(sys.stdin); print(d.get('i1',''))" \
       2>/dev/null) || i1_val=""
-    log_debug "python3 parsed i1 (first 80): ${i1_val:0:80}"
+    log_debug "python3 i1 (first 80): ${i1_val:0:80}"
 
-    # Шаг 3: fallback на jq
     if [[ -z "$i1_val" ]] && command -v jq &>/dev/null; then
       i1_val=$(echo "$api_resp" | jq -r '.i1 // empty' 2>/dev/null) || i1_val=""
-      log_debug "jq parsed i1 (first 80): ${i1_val:0:80}"
+      log_debug "jq i1 (first 80): ${i1_val:0:80}"
     fi
 
-    # Шаг 4: fallback на grep
     if [[ -z "$i1_val" ]]; then
       i1_val=$(echo "$api_resp" | grep -oP '"i1"\s*:\s*"\K[^"]+' 2>/dev/null) || i1_val=""
-      log_debug "grep parsed i1 (first 80): ${i1_val:0:80}"
+      log_debug "grep i1 (first 80): ${i1_val:0:80}"
     fi
   else
     log_warn "API вернул пустой ответ"
   fi
 
-  # Шаг 5: static fallback если ничего не вышло
   if [[ -z "$i1_val" ]]; then
-    warn "API недоступен — fallback Google DNS"
-    log_warn "fetch_i1_from_api: все методы исчерпаны, используем Google DNS fallback"
+    warn "API недоступен — fallback Google DNS" >&2
+    log_warn "fetch_i1_from_api: fallback Google DNS"
     echo "$I1_GOOGLE"
     return 0
   fi
 
   log_info "I1 до нормализации (first 100): ${i1_val:0:100}"
 
-  # Нормализация: убираем пробел после <b если его нет → <b0x → <b 0x
   if [[ "$i1_val" =~ ^\<b0x ]]; then
     i1_val="${i1_val/<b0x/<b 0x}"
-    warn "API вернул I1 без пробела — исправлено"
-    log_warn "I1 не имел пробела после <b — исправлено"
+    warn "API вернул I1 без пробела — исправлено" >&2
+    log_warn "I1: добавлен пробел после <b"
   fi
 
-  # Валидация: формат <b 0x....> — допускаем любой hex-контент (не только чистый hex)
-  # AWG принимает <b 0xHEXSTRING> где строка может содержать любые байты
   if [[ ! "$i1_val" =~ ^\<b\ 0x ]]; then
-    warn "I1 из API имеет неверный формат — fallback Google DNS"
-    log_err "I1 неверный формат. Получено: ${i1_val:0:100}"
-    echo "$I1_GOOGLE"
-    return 0
-  fi
-  if [[ ! "$i1_val" =~ \>$ ]]; then
-    warn "I1 из API не закрыт символом '>' — fallback Google DNS"
-    log_err "I1 не закрыт >. Получено: ${i1_val: -20}"
+    warn "I1 из API неверный формат — fallback Google DNS" >&2
+    log_err "I1 неверный формат: ${i1_val:0:100}"
     echo "$I1_GOOGLE"
     return 0
   fi
 
-  log_info "I1 получен и валиден: ${i1_val:0:60}..."
-  ok "I1 получен с API"
+  if [[ ! "$i1_val" =~ \>$ ]]; then
+    warn "I1 из API не закрыт '>' — fallback Google DNS" >&2
+    log_err "I1 не закрыт >: ${i1_val: -20}"
+    echo "$I1_GOOGLE"
+    return 0
+  fi
+
+  log_info "I1 валиден: ${i1_val:0:60}..."
+  # ВАЖНО: ok() пишет в >&2, чтобы не попасть в $() при захвате
+  ok "I1 получен с API" >&2
   echo "$i1_val"
 }
 
