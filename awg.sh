@@ -263,6 +263,21 @@ fetch_i1_from_api() {
     return 0
   fi
 
+  # Валидация формата: должен быть <b 0x...> с пробелом после <b
+  # API иногда возвращает <b0x...> без пробела — исправляем
+  if [[ "$i1_val" =~ ^\<b0x ]]; then
+    i1_val="${i1_val/<b0x/<b 0x}"
+    warn "API вернул I1 без пробела — исправлено автоматически"
+  fi
+
+  # Финальная проверка что формат валидный
+  if [[ ! "$i1_val" =~ ^\<b\ 0x[0-9a-fA-F]+\>$ ]]; then
+    warn "I1 из API имеет неверный формат — fallback Google DNS"
+    warn "Получено: ${i1_val:0:60}..."
+    echo "$I1_GOOGLE"
+    return 0
+  fi
+
   ok "I1 получен с API"
   echo "$i1_val"
 }
@@ -450,9 +465,10 @@ do_gen() {
   echo "  3) 10.102.0.0/24"
   echo "  4) 10.103.0.0/24"
   echo "  5) Вручную"
+  local CLIENT_ADDR="" SERVER_ADDR="" CLIENT_NET=""
+  local ADDR_CHOICE
   read -rp "$(echo -e "${C}  Выбор [1-5] (Enter = 10.100.0.0/24): ${N}")" ADDR_CHOICE
   ADDR_CHOICE=${ADDR_CHOICE:-1}
-  local CLIENT_ADDR SERVER_ADDR CLIENT_NET
   case $ADDR_CHOICE in
     1) CLIENT_ADDR="10.100.0.2/32"; SERVER_ADDR="10.100.0.1/24"; CLIENT_NET="10.100.0.0/24" ;;
     2) CLIENT_ADDR="10.101.0.2/32"; SERVER_ADDR="10.101.0.1/24"; CLIENT_NET="10.101.0.0/24" ;;
@@ -480,9 +496,9 @@ do_gen() {
   echo "  2) 1380 — лучше для мобильных"
   echo "  3) 1280 — максимальная совместимость"
   echo "  4) Вручную"
+  local MTU_CHOICE MTU=""
   read -rp "$(echo -e "${C}  Выбор [1-4] (Enter = 1380): ${N}")" MTU_CHOICE
   MTU_CHOICE=${MTU_CHOICE:-2}
-  local MTU
   case $MTU_CHOICE in
     1) MTU=1420 ;; 2) MTU=1380 ;; 3) MTU=1280 ;;
     4)
@@ -494,8 +510,8 @@ do_gen() {
   esac
 
   hdr "Порт сервера:"
+  local PORT=""
   read -rp "$(echo -e "${C}  Порт [51820 / r = случайный]: ${N}")" PORT
-  local PORT
   if [[ "${PORT:-}" == "r" || "${PORT:-}" == "R" ]]; then
     PORT=$(( RANDOM % 35500 + 30001 ))
     ok "случайный порт: $PORT"
