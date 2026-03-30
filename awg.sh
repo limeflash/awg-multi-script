@@ -15,6 +15,17 @@ info() { echo -e "${C}  → $*${N}"; }
 hdr()  { echo -e "\n${W}$*${N}"; }
 
 SERVER_CONF="/etc/amnezia/amneziawg/awg0.conf"
+LOG_FILE="/var/log/awg-manager.log"
+
+# ── Логирование ────────────────────────────────────────────
+_log() {
+  local level="$1"; shift
+  printf '[%s] [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$level" "$*" >> "$LOG_FILE"
+}
+log_info()  { _log "INFO"  "$@"; }
+log_warn()  { _log "WARN"  "$@"; }
+log_err()   { _log "ERROR" "$@"; }
+log_debug() { _log "DEBUG" "$@"; }
 
 # ── Константа I1 Google DNS (fallback) ────────────────────
 I1_GOOGLE='<b 0x84050100000100000000000006676f6f676c6503636f6d0000010001>'
@@ -86,7 +97,7 @@ show_header() {
   s=$(get_status)
   IFS='|' read -r ip port st clients <<< "$s"
   echo -e "${B}╔══════════════════════════════════════════════╗${N}"
-  echo -e "${B}║${W}        AmneziaWG Manager v3.1               ${B}║${N}"
+  echo -e "${B}║${W}        AmneziaWG Manager v3.2                ${B}║${N}"
   echo -e "${B}╚══════════════════════════════════════════════╝${N}"
   echo -e "${B}  IP сервера : ${W}$ip${N}"
   echo -e "${B}  Порт       : ${W}$port${N}"
@@ -236,48 +247,67 @@ fetch_i1_from_api() {
   local api_url="https://junk.web2core.workers.dev/signature?domain=${domain}"
   local api_resp i1_val=""
 
+  log_info "fetch_i1_from_api: domain=$domain url=$api_url"
+
   # Шаг 1: curl
   api_resp=$(curl -s --connect-timeout 10 "$api_url" 2>/dev/null) || api_resp=""
+  log_debug "API raw response (first 200): ${api_resp:0:200}"
 
   if [[ -n "$api_resp" ]]; then
     # Шаг 2: python3 JSON парсинг
     i1_val=$(echo "$api_resp" | python3 -c \
       "import sys,json; d=json.load(sys.stdin); print(d.get('i1',''))" \
       2>/dev/null) || i1_val=""
+    log_debug "python3 parsed i1 (first 80): ${i1_val:0:80}"
 
-    # Шаг 3: fallback на jq (если python3 недоступен)
+    # Шаг 3: fallback на jq
     if [[ -z "$i1_val" ]] && command -v jq &>/dev/null; then
       i1_val=$(echo "$api_resp" | jq -r '.i1 // empty' 2>/dev/null) || i1_val=""
+      log_debug "jq parsed i1 (first 80): ${i1_val:0:80}"
     fi
 
-    # Шаг 4: fallback на grep (грубый но рабочий)
+    # Шаг 4: fallback на grep
     if [[ -z "$i1_val" ]]; then
       i1_val=$(echo "$api_resp" | grep -oP '"i1"\s*:\s*"\K[^"]+' 2>/dev/null) || i1_val=""
+      log_debug "grep parsed i1 (first 80): ${i1_val:0:80}"
     fi
+  else
+    log_warn "API вернул пустой ответ"
   fi
 
-  # Шаг 5: финальный static fallback
+  # Шаг 5: static fallback если ничего не вышло
   if [[ -z "$i1_val" ]]; then
-    warn "API недоступен — все методы исчерпаны, fallback Google DNS"
+    warn "API недоступен — fallback Google DNS"
+    log_warn "fetch_i1_from_api: все методы исчерпаны, используем Google DNS fallback"
     echo "$I1_GOOGLE"
     return 0
   fi
 
-  # Валидация формата: должен быть <b 0x...> с пробелом после <b
-  # API иногда возвращает <b0x...> без пробела — исправляем
+  log_info "I1 до нормализации (first 100): ${i1_val:0:100}"
+
+  # Нормализация: убираем пробел после <b если его нет → <b0x → <b 0x
   if [[ "$i1_val" =~ ^\<b0x ]]; then
     i1_val="${i1_val/<b0x/<b 0x}"
-    warn "API вернул I1 без пробела — исправлено автоматически"
+    warn "API вернул I1 без пробела — исправлено"
+    log_warn "I1 не имел пробела после <b — исправлено"
   fi
 
-  # Финальная проверка что формат валидный
-  if [[ ! "$i1_val" =~ ^\<b\ 0x[0-9a-fA-F]+\>$ ]]; then
+  # Валидация: формат <b 0x....> — допускаем любой hex-контент (не только чистый hex)
+  # AWG принимает <b 0xHEXSTRING> где строка может содержать любые байты
+  if [[ ! "$i1_val" =~ ^\<b\ 0x ]]; then
     warn "I1 из API имеет неверный формат — fallback Google DNS"
-    warn "Получено: ${i1_val:0:60}..."
+    log_err "I1 неверный формат. Получено: ${i1_val:0:100}"
+    echo "$I1_GOOGLE"
+    return 0
+  fi
+  if [[ ! "$i1_val" =~ \>$ ]]; then
+    warn "I1 из API не закрыт символом '>' — fallback Google DNS"
+    log_err "I1 не закрыт >. Получено: ${i1_val: -20}"
     echo "$I1_GOOGLE"
     return 0
   fi
 
+  log_info "I1 получен и валиден: ${i1_val:0:60}..."
   ok "I1 получен с API"
   echo "$i1_val"
 }
@@ -442,8 +472,9 @@ EOF
 # 2. СОЗДАТЬ СЕРВЕР
 # ══════════════════════════════════════════════════════════
 do_gen() {
-  command -v awg &>/dev/null || { err "awg не найден. Сначала пункт 1"; return 1; }
-  command -v python3 &>/dev/null || { err "python3 не найден. Сначала пункт 1"; return 1; }
+  log_info "do_gen: старт"
+  command -v awg &>/dev/null || { err "awg не найден. Сначала пункт 1"; log_err "awg не найден"; return 1; }
+  command -v python3 &>/dev/null || { err "python3 не найден. Сначала пункт 1"; log_err "python3 не найден"; return 1; }
 
   # Backup существующего конфига
   local bak_ts
@@ -552,6 +583,10 @@ do_gen() {
   AWG_PARAMS_LINES=""
   gen_awg_params "$AWG_VERSION"
 
+  log_info "do_gen: ver=$AWG_VERSION port=$PORT mtu=$MTU srv=$SERVER_ADDR cli=$CLIENT_ADDR net=$CLIENT_NET iface=$iface"
+  log_info "do_gen: I1=${I1:0:60}"
+  log_info "do_gen: AWG_PARAMS=${AWG_PARAMS_LINES//$'\n'/ | }"
+
   echo 1 > /proc/sys/net/ipv4/ip_forward
   grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf || \
     echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
@@ -581,6 +616,10 @@ do_gen() {
   } > "$SERVER_CONF"
   chmod 600 "$SERVER_CONF"
 
+  log_info "do_gen: серверный конфиг записан в $SERVER_CONF"
+  # Логируем конфиг без приватного ключа
+  grep -v "PrivateKey\|PresharedKey" "$SERVER_CONF" | while IFS= read -r l; do log_debug "srv_conf: $l"; done
+
   # ── Конфиг клиента ──
   {
     echo "[Interface]"
@@ -601,7 +640,12 @@ do_gen() {
   } > /root/client1_awg2.conf
   chmod 600 /root/client1_awg2.conf
 
-  awg-quick up "$SERVER_CONF"
+  log_info "do_gen: запускаем awg-quick up $SERVER_CONF"
+  if awg-quick up "$SERVER_CONF"; then
+    log_info "do_gen: awg-quick up успешно"
+  else
+    log_err "do_gen: awg-quick up провалился (rc=$?)"
+  fi
 
   if command -v ufw &>/dev/null; then
     read -rp "$(echo -e "${C}  Открыть порт $PORT/udp в UFW? [Y/n]: ${N}")" OPEN_UFW
@@ -998,9 +1042,14 @@ AWG_VERSION="2.0"
 I1=""
 AWG_PARAMS_LINES=""
 
+# Создаём лог-файл с правильными правами
+touch "$LOG_FILE" 2>/dev/null && chmod 600 "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/awg-manager.log"
+log_info "=== AWG Manager запущен (PID=$$, USER=$(whoami)) ==="
+
 while true; do
   show_header
   show_menu
+  log_info "Выбор пункта меню: ${CHOICE:-<пусто>}"
   case "${CHOICE:-}" in
     1) do_install ;;
     2) do_gen ;;
@@ -1009,7 +1058,7 @@ while true; do
     5) do_show_qr ;;
     6) do_restart ;;
     7) do_uninstall ;;
-    0) echo -e "\n${G}  Пока!${N}\n"; exit 0 ;;
+    0) log_info "Выход"; echo -e "\n${G}  Пока!${N}\n"; exit 0 ;;
     *) warn "Неверный выбор" ;;
   esac
   echo ""
