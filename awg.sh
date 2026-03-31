@@ -40,29 +40,23 @@ get_public_ip() {
   echo ""
 }
 
-# ── FIX: Генерация случайного числа без overflow ──────────
-# bash RANDOM — знаковый 32bit, RANDOM*RANDOM может стать отрицательным.
-# Используем python3 для надёжных больших чисел.
+# ── Генерация случайного числа без overflow ────────────────
 rand_range() {
-  # rand_range MIN MAX → случайное целое в [MIN, MAX]
   local lo="$1" hi="$2"
   python3 -c "import random; print(random.randint($lo, $hi))"
 }
 
-# ── FIX: Поиск свободного IP, исключая IP сервера ─────────
+# ── Поиск свободного IP, исключая IP сервера ───────────────
 find_free_ip() {
   local base="$1"
-  # Парсим IP сервера из Address строки, чтобы не выдать его клиенту
   local srv_ip_oct=""
   if [[ -f "$SERVER_CONF" ]]; then
     local srv_addr
-    srv_addr=$(grep "^Address" "$SERVER_CONF" | awk -F'[= /]' '{print $NF}' | awk -F'=' '{print $2}' | tr -d ' ' | head -1 || true)
-    # Извлекаем последний октет из X.X.X.Y/Z
-    srv_ip_oct=$(echo "$srv_addr" | grep -oP '\d+(?=/\d+$)' || true)
+    srv_addr=$(grep "^Address" "$SERVER_CONF" | awk -F'=' '{print $2}' | tr -d ' ' | head -1)
+    srv_ip_oct=$(echo "$srv_addr" | grep -oE '[0-9]+' | tail -1)
   fi
 
   for i in $(seq 2 254); do
-    # Пропускаем .1 (серверный) и IP сервера из конфига
     [[ "$i" == "1" ]] && continue
     [[ -n "$srv_ip_oct" && "$i" == "$srv_ip_oct" ]] && continue
     if ! grep -qF "${base}.${i}/32" "$SERVER_CONF" 2>/dev/null; then
@@ -78,7 +72,6 @@ get_status() {
   local ip port status clients
   ip=$(get_public_ip)
   [[ -z "$ip" ]] && ip="—"
-  # FIX: убран дублирующий 2>&1 при уже использованном &>/dev/null
   if ip link show awg0 &>/dev/null; then
     status="${G}активен${N}"
     port=$(awg show awg0 listen-port 2>/dev/null) || port="—"
@@ -97,7 +90,7 @@ show_header() {
   s=$(get_status)
   IFS='|' read -r ip port st clients <<< "$s"
   echo -e "${B}╔══════════════════════════════════════════════╗${N}"
-  echo -e "${B}║${W}        AmneziaWG Manager v3.3                ${B}║${N}"
+  echo -e "${B}║${W}        AmneziaWG Manager v3.4                ${B}║${N}"
   echo -e "${B}╚══════════════════════════════════════════════╝${N}"
   echo -e "${B}  IP сервера : ${W}$ip${N}"
   echo -e "${B}  Порт       : ${W}$port${N}"
@@ -124,7 +117,6 @@ show_menu() {
 # ОБЩИЕ: выбор DNS
 # ══════════════════════════════════════════════════════════
 choose_dns() {
-  # FIX: сброс глобальной переменной перед выбором
   CLIENT_DNS=""
   hdr "DNS для клиента:"
   echo "  1) Cloudflare  — 1.1.1.1, 1.0.0.1"
@@ -146,7 +138,6 @@ choose_dns() {
 # ОБЩИЕ: выбор версии AWG
 # ══════════════════════════════════════════════════════════
 choose_awg_version() {
-  # FIX: сброс глобальной переменной
   AWG_VERSION=""
   hdr "Версия протокола:"
   echo "  1) AWG 2.0  — S3/S4 + H1-H4 диапазоны + I1-I5  (рекомендуется)"
@@ -167,7 +158,6 @@ choose_awg_version() {
 
 # ══════════════════════════════════════════════════════════
 # ОБЩИЕ: генерация AWG параметров
-# FIX: RANDOM*RANDOM → python3 rand_range() без overflow
 # ══════════════════════════════════════════════════════════
 gen_awg_params() {
   local ver="$1"
@@ -181,30 +171,25 @@ gen_awg_params() {
   Jmax=$(rand_range 576 1024)
   S1=$(rand_range 10 39)
   S2_OFF=$(rand_range 1 63)
-  # S2_OFF=56 → конфликт с magic byte, смещаем
   [[ "$S2_OFF" -eq 56 ]] && S2_OFF=57
   S2=$(( S1 + S2_OFF ))
   [[ $S2 -gt 64 ]] && S2=64
-  Q=1073741823  # 2^30 - 1, максимум квадранта
+  Q=1073741823
 
   if [[ "$ver" == "2.0" ]]; then
     local S3 S4
     local H1_S H1_W H1 H2_S H2_W H2 H3_S H3_W H3 H4_S H4_W H4
     S3=$(rand_range 5 34)
     S4=$(rand_range 1 16)
-    # H1: квадрант 0 → [0, Q-1]
     H1_S=$(rand_range 0 $((Q - 1)))
     H1_W=$(rand_range 30000 130000)
     H1="${H1_S}-$((H1_S + H1_W))"
-    # H2: квадрант 1 → [Q, 2Q-1]
     H2_S=$(rand_range $Q $((Q * 2 - 1)))
     H2_W=$(rand_range 30000 130000)
     H2="${H2_S}-$((H2_S + H2_W))"
-    # H3: квадрант 2 → [2Q, 3Q-1]
     H3_S=$(rand_range $((Q * 2)) $((Q * 3 - 1)))
     H3_W=$(rand_range 30000 130000)
     H3="${H3_S}-$((H3_S + H3_W))"
-    # H4: квадрант 3 → [3Q, 4Q-1]
     H4_S=$(rand_range $((Q * 3)) $((Q * 4 - 1)))
     H4_W=$(rand_range 30000 130000)
     H4="${H4_S}-$((H4_S + H4_W))"
@@ -220,7 +205,6 @@ H2 = $H2
 H3 = $H3
 H4 = $H4"
   else
-    # AWG 1.0 / 1.5: H1-H4 — одиночные значения (не диапазоны)
     local H1 H2 H3 H4
     H1=$(rand_range 0 $((Q - 1)))
     H2=$(rand_range $Q $((Q * 2 - 1)))
@@ -240,7 +224,6 @@ H4 = $H4"
 
 # ══════════════════════════════════════════════════════════
 # ОБЩИЕ: fetch I1 через API с fallback chain
-# FIX: curl → python3 → jq → grep → static Google DNS
 # ══════════════════════════════════════════════════════════
 fetch_i1_from_api() {
   local domain="$1"
@@ -279,6 +262,7 @@ fetch_i1_from_api() {
   fi
 
   log_info "I1 до нормализации (first 100): ${i1_val:0:100}"
+  i1_val=$(echo "$i1_val" | sed 's/^"//;s/"$//')
 
   if [[ "$i1_val" =~ ^\<b0x ]]; then
     i1_val="${i1_val/<b0x/<b 0x}"
@@ -301,7 +285,6 @@ fetch_i1_from_api() {
   fi
 
   log_info "I1 валиден: ${i1_val:0:60}..."
-  # ВАЖНО: ok() пишет в >&2, чтобы не попасть в $() при захвате
   ok "I1 получен с API" >&2
   echo "$i1_val"
 }
@@ -310,7 +293,6 @@ fetch_i1_from_api() {
 # ОБЩИЕ: выбор I1 (только для AWG 1.5 и 2.0)
 # ══════════════════════════════════════════════════════════
 choose_i1() {
-  # FIX: сброс глобальной переменной
   I1=""
   hdr "Имитация протокола (I1):"
   echo "  1) Google DNS — статический (совместим со всеми)"
@@ -335,7 +317,7 @@ choose_i1() {
 }
 
 # ══════════════════════════════════════════════════════════
-# FIX: Валидация MTU (576-1500)
+# Валидация MTU (576-1500)
 # ══════════════════════════════════════════════════════════
 validate_mtu() {
   local mtu="$1"
@@ -345,7 +327,7 @@ validate_mtu() {
 }
 
 # ══════════════════════════════════════════════════════════
-# FIX: Валидация IP в формате X.X.X.X/32
+# Валидация IP в формате X.X.X.X/32
 # ══════════════════════════════════════════════════════════
 validate_ip_cidr() {
   local ip="$1"
@@ -357,18 +339,28 @@ validate_ip_cidr() {
 }
 
 # ══════════════════════════════════════════════════════════
-# FIX: Парсинг AWG параметров из серверного конфига
-# Явный порядок, без head -N, без риска обрезки
+# Парсинг AWG параметров из серверного конфига
 # ══════════════════════════════════════════════════════════
 extract_awg_params() {
   local conf="$1"
   local result=""
-  for key in Jc Jmin Jmax S1 S2 S3 S4 H1 H2 H3 H4; do
+  local has_s3=false
+  grep -q "^S3 = " "$conf" 2>/dev/null && has_s3=true
+  
+  for key in Jc Jmin Jmax S1 S2 H1 H2 H3 H4; do
     local line
     line=$(grep "^${key} = " "$conf" 2>/dev/null | head -1 || true)
     [[ -n "$line" ]] && result+="${line}"$'\n'
   done
-  # Убираем trailing newline
+  
+  if $has_s3; then
+    for key in S3 S4; do
+      local line
+      line=$(grep "^${key} = " "$conf" 2>/dev/null | head -1 || true)
+      [[ -n "$line" ]] && result+="${line}"$'\n'
+    done
+  fi
+  
   echo "${result%$'\n'}"
 }
 
@@ -388,7 +380,7 @@ do_install() {
     software-properties-common \
     python3-launchpadlib \
     python3 \
-    net-tools curl ufw iptables qrencode
+    net-tools curl ufw iptables qrencode bc
 
   hdr "=== Kernel headers ==="
   apt-get install -y -q "linux-headers-$(uname -r)" 2>/dev/null || \
@@ -470,7 +462,6 @@ do_gen() {
   command -v awg &>/dev/null || { err "awg не найден. Сначала пункт 1"; log_err "awg не найден"; return 1; }
   command -v python3 &>/dev/null || { err "python3 не найден. Сначала пункт 1"; log_err "python3 не найден"; return 1; }
 
-  # Backup существующего конфига
   local bak_ts
   bak_ts="${SERVER_CONF}.bak.$(date +%s)"
   [[ -f "$SERVER_CONF" ]] && cp "$SERVER_CONF" "$bak_ts" && info "Backup: $bak_ts"
@@ -478,7 +469,6 @@ do_gen() {
   choose_awg_version
   choose_dns
 
-  # I1 только для 1.5 и 2.0
   I1=""
   if [[ "$AWG_VERSION" == "1.5" || "$AWG_VERSION" == "2.0" ]]; then
     choose_i1
@@ -510,7 +500,6 @@ do_gen() {
     *) CLIENT_ADDR="10.100.0.2/32"; SERVER_ADDR="10.100.0.1/24"; CLIENT_NET="10.100.0.0/24" ;;
   esac
 
-  # Проверяем что сеть — приватная
   [[ "$CLIENT_NET" =~ ^10\.|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[0-1])\. ]] || {
     err "только private сети (10.x, 192.168.x, 172.16-31.x)"
     return 1
@@ -528,7 +517,6 @@ do_gen() {
     1) MTU=1420 ;; 2) MTU=1380 ;; 3) MTU=1280 ;;
     4)
       read -rp "  MTU (576-1500): " MTU
-      # FIX: валидация MTU при ручном вводе
       validate_mtu "$MTU" || return 1
       ;;
     *) MTU=1380 ;;
@@ -538,12 +526,11 @@ do_gen() {
   local PORT=""
   read -rp "$(echo -e "${C}  Порт [51820 / r = случайный]: ${N}")" PORT
   if [[ "${PORT:-}" == "r" || "${PORT:-}" == "R" ]]; then
-    PORT=$(( RANDOM % 35500 + 30001 ))
+    PORT=$(rand_range 30001 65535)
     ok "случайный порт: $PORT"
   else
     PORT=${PORT:-51820}
   fi
-  # Валидация порта
   [[ "$PORT" =~ ^[0-9]+$ ]] && [[ "$PORT" -ge 1024 && "$PORT" -le 65535 ]] || {
     err "Порт должен быть 1024-65535"; return 1
   }
@@ -573,7 +560,6 @@ do_gen() {
   iface=$(ip route | awk '/default/{print $5; exit}')
   [[ -z "$iface" ]] && { err "не удалось определить интерфейс"; return 1; }
 
-  # Генерируем AWG-параметры один раз — сервер и клиент должны совпадать
   AWG_PARAMS_LINES=""
   gen_awg_params "$AWG_VERSION"
 
@@ -591,7 +577,6 @@ do_gen() {
   awg-quick down "$SERVER_CONF" 2>/dev/null || \
     ip link delete dev awg0 2>/dev/null || true
 
-  # ── Конфиг сервера ──
   {
     echo "[Interface]"
     echo "PrivateKey = $srv_priv"
@@ -611,10 +596,8 @@ do_gen() {
   chmod 600 "$SERVER_CONF"
 
   log_info "do_gen: серверный конфиг записан в $SERVER_CONF"
-  # Логируем конфиг без приватного ключа
   grep -v "PrivateKey\|PresharedKey" "$SERVER_CONF" | while IFS= read -r l; do log_debug "srv_conf: $l"; done
 
-  # ── Конфиг клиента ──
   {
     echo "[Interface]"
     echo "PrivateKey = $cli_priv"
@@ -627,7 +610,6 @@ do_gen() {
     echo "[Peer]"
     echo "PublicKey = $srv_pub"
     echo "PresharedKey = $psk"
-    # FIX (правило): Endpoint всегда IP, никогда домен
     echo "Endpoint = $srv_ip:$PORT"
     echo "AllowedIPs = 0.0.0.0/0, ::/0"
     echo "PersistentKeepalive = 25"
@@ -662,11 +644,9 @@ do_gen() {
   echo -e "${W}  IP     : ${N}$srv_ip:$PORT"
   echo -e "${W}  Iface  : ${N}$iface"
 
-  # FIX: автозапуск через кастомный unit (путь /etc/amnezia, не /etc/wireguard)
   _setup_autostart
 }
 
-# FIX: systemctl autostart — создаём override с правильным путём
 _setup_autostart() {
   local unit_dir="/etc/systemd/system/awg-quick@awg0.service.d"
   mkdir -p "$unit_dir"
@@ -685,9 +665,6 @@ EOF
 
 # ══════════════════════════════════════════════════════════
 # 3. ДОБАВИТЬ КЛИЕНТА
-# FIX: preshared-key через tmpfile (не process substitution)
-# FIX: IP валидация, find_free_ip исключает сервер
-# FIX: AWG params через extract_awg_params (явный порядок)
 # ══════════════════════════════════════════════════════════
 do_add_client() {
   [[ ! -f "$SERVER_CONF" ]] && { err "конфиг сервера не найден. Сначала пункт 2"; return 1; }
@@ -707,7 +684,6 @@ do_add_client() {
   [[ -z "$client_name" ]] && { err "имя не может быть пустым"; return 1; }
   [[ ! "$client_name" =~ ^[a-zA-Z0-9_-]+$ ]] && { err "только буквы, цифры, _ и -"; return 1; }
 
-  # Проверка дублирующегося имени файла
   local client_file="/root/${client_name}_awg2.conf"
   [[ -f "$client_file" ]] && {
     warn "Файл $client_file уже существует — будет перезаписан"
@@ -717,26 +693,25 @@ do_add_client() {
   CONFIRM_IP=${CONFIRM_IP:-y}
   if [[ ! $CONFIRM_IP =~ ^[Yy]$ ]]; then
     read -rp "  IP вручную (пример: ${base_ip}.5/32): " client_addr
-    # FIX: валидация ручного IP
     validate_ip_cidr "$client_addr" || return 1
-    # Дополнительно: проверка что маска /32
     [[ "$client_addr" =~ /32$ ]] || { err "для клиента нужна маска /32"; return 1; }
   fi
 
   choose_dns
 
-  # Определяем версию из серверного конфига
   local detected_ver="wg"
   if grep -q "^S3 = " "$SERVER_CONF" 2>/dev/null; then
     detected_ver="2.0"
-  elif grep -q "^I1 = " "$SERVER_CONF" 2>/dev/null; then
-    detected_ver="1.5"
-  elif grep -q "^Jc = " "$SERVER_CONF" 2>/dev/null; then
-    detected_ver="1.0"
+  elif grep -q "^H1 = " "$SERVER_CONF" 2>/dev/null && grep -q "^H2 = " "$SERVER_CONF" && \
+       grep -q "^H3 = " "$SERVER_CONF" && grep -q "^H4 = " "$SERVER_CONF"; then
+    if grep -q "^I1 = " "$SERVER_CONF" 2>/dev/null; then
+      detected_ver="1.5"
+    else
+      detected_ver="1.0"
+    fi
   fi
   info "Версия сервера: $detected_ver — клиент будет совместим"
 
-  # I1 только для 1.5 и 2.0
   local i1_line=""
   if [[ "$detected_ver" == "1.5" || "$detected_ver" == "2.0" ]]; then
     hdr "Имитация протокола (I1):"
@@ -747,7 +722,6 @@ do_add_client() {
     echo "  5) Без имитации"
     read -rp "$(echo -e "${C}  Выбор [1-5] (Enter = Google): ${N}")" I1_CHOICE
     I1_CHOICE=${I1_CHOICE:-1}
-    local i1_val=""
     case $I1_CHOICE in
       1) i1_line="I1 = ${I1_GOOGLE}" ;;
       2) i1_line="I1 = ${I1_YANDEX}" ;;
@@ -756,18 +730,15 @@ do_add_client() {
         read -rp "  Домен (Enter = google.com): " domain
         domain=${domain:-google.com}
         info "запрос к API для $domain..."
-        i1_val=$(fetch_i1_from_api "$domain")
-        i1_line="I1 = ${i1_val}"
+        i1_line="I1 = $(fetch_i1_from_api "$domain")"
         ;;
       4)
-        # Берём из серверного конфига; если нет — fallback Google
         i1_line=$(grep "^I1 = " "$SERVER_CONF" | head -1 || true)
         [[ -z "$i1_line" ]] && { warn "I1 не найден в конфиге сервера, используем Google"; i1_line="I1 = ${I1_GOOGLE}"; }
         ;;
       5) i1_line="" ;;
       *) i1_line="I1 = ${I1_GOOGLE}" ;;
     esac
-    # FIX: финальная проверка — если i1_line пустой при ожидаемом значении
     if [[ "$I1_CHOICE" != "5" && -z "$i1_line" ]]; then
       warn "I1 оказался пустым → fallback Google DNS"
       i1_line="I1 = ${I1_GOOGLE}"
@@ -789,7 +760,6 @@ do_add_client() {
   cli_pub=$(echo "$cli_priv" | awg pubkey)
   psk=$(awg genpsk)
 
-  # ── Добавляем peer в серверный конфиг ──
   {
     echo ""
     echo "[Peer]"
@@ -799,12 +769,10 @@ do_add_client() {
     echo "AllowedIPs = $client_addr"
   } >> "$SERVER_CONF"
 
-  # FIX: preshared-key через tmpfile, не process substitution
   local psk_tmp
   psk_tmp=$(mktemp)
   chmod 600 "$psk_tmp"
   echo "$psk" > "$psk_tmp"
-  # trap для cleanup tmpfile при любом выходе из функции
   trap 'rm -f "$psk_tmp"' RETURN
 
   awg set awg0 peer "$cli_pub" \
@@ -812,8 +780,6 @@ do_add_client() {
     allowed-ips "$client_addr" \
     || { err "не удалось добавить peer в runtime"; return 1; }
 
-  # ── Конфиг клиента ──
-  # FIX: AWG params через extract_awg_params — явный порядок, без head -N
   local awg_params_from_srv
   awg_params_from_srv=$(extract_awg_params "$SERVER_CONF")
 
@@ -829,7 +795,6 @@ do_add_client() {
     echo "[Peer]"
     echo "PublicKey = $srv_pub"
     echo "PresharedKey = $psk"
-    # FIX (правило): Endpoint всегда IP
     echo "Endpoint = $srv_ip:$port"
     echo "AllowedIPs = 0.0.0.0/0, ::/0"
     echo "PersistentKeepalive = 25"
@@ -850,15 +815,12 @@ do_add_client() {
 
 # ══════════════════════════════════════════════════════════
 # 4. ПОКАЗАТЬ КЛИЕНТОВ
-# FIX: tx_raw/rx_raw объявлены в scope всего цикла
-# FIX: одиночный вызов awg show transfer (кэш в переменной)
 # ══════════════════════════════════════════════════════════
 do_list_clients() {
   [[ ! -f "$SERVER_CONF" ]] && { err "конфиг сервера не найден"; return 1; }
   hdr "Клиенты:"
   echo ""
 
-  # Кэшируем вывод transfer один раз
   local transfer_cache
   transfer_cache=$(awg show awg0 transfer 2>/dev/null || true)
 
@@ -872,9 +834,10 @@ do_list_clients() {
       name="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^PublicKey[[:space:]]=[[:space:]](.+) ]]; then
       pubkey="${BASH_REMATCH[1]}"
-      # FIX: используем кэш, не двойной вызов awg show
-      tx_raw=$(echo "$transfer_cache" | grep -F "$pubkey" | awk '{print $2}' || echo "0")
-      rx_raw=$(echo "$transfer_cache" | grep -F "$pubkey" | awk '{print $3}' || echo "0")
+      local transfer_line
+      transfer_line=$(echo "$transfer_cache" | grep -F "$pubkey" | head -1)
+      tx_raw=$(echo "$transfer_line" | awk '{print $2}' 2>/dev/null || echo "0")
+      rx_raw=$(echo "$transfer_line" | awk '{print $3}' 2>/dev/null || echo "0")
       tx_raw=${tx_raw:-0}
       rx_raw=${rx_raw:-0}
     elif [[ "$line" =~ ^AllowedIPs[[:space:]]=[[:space:]](.+) ]]; then
@@ -882,16 +845,15 @@ do_list_clients() {
       local short_name tx_fmt rx_fmt
       short_name="${name:-безымянный}"
       short_name="${short_name:0:7}"
-      # Форматирование: ГБ если >= 1 ГБ, иначе МБ
-      if awk "BEGIN {exit !($tx_raw >= 1073741824)}" 2>/dev/null; then
-        tx_fmt=$(awk "BEGIN {printf \"%.2f ГБ\", $tx_raw/1073741824}")
+      if (( tx_raw >= 1073741824 )); then
+        tx_fmt=$(echo "scale=2; $tx_raw/1073741824" | bc 2>/dev/null || echo "0")" ГБ"
       else
-        tx_fmt=$(awk "BEGIN {printf \"%.2f МБ\", $tx_raw/1048576}")
+        tx_fmt=$(echo "scale=2; $tx_raw/1048576" | bc 2>/dev/null || echo "0")" МБ"
       fi
-      if awk "BEGIN {exit !($rx_raw >= 1073741824)}" 2>/dev/null; then
-        rx_fmt=$(awk "BEGIN {printf \"%.2f ГБ\", $rx_raw/1073741824}")
+      if (( rx_raw >= 1073741824 )); then
+        rx_fmt=$(echo "scale=2; $rx_raw/1073741824" | bc 2>/dev/null || echo "0")" ГБ"
       else
-        rx_fmt=$(awk "BEGIN {printf \"%.2f МБ\", $rx_raw/1048576}")
+        rx_fmt=$(echo "scale=2; $rx_raw/1048576" | bc 2>/dev/null || echo "0")" МБ"
       fi
       echo -e "  ${W}$(printf '%2d' $i))${N} ${C}$(printf '%-7s' "$short_name")${N}  IP: ${W}$(printf '%-20s' "$ip")${N}  ↑ $(printf '%-12s' "$tx_fmt")  ↓ $rx_fmt"
     fi
@@ -907,7 +869,6 @@ do_list_clients() {
 do_show_qr() {
   command -v qrencode &>/dev/null || { err "qrencode не установлен"; return 1; }
 
-  # Собираем все конфиги клиентов из /root/
   local found=()
   while IFS= read -r -d '' f; do
     found+=("$f")
@@ -915,7 +876,6 @@ do_show_qr() {
 
   [[ ${#found[@]} -eq 0 ]] && { err "конфиги клиентов не найдены в /root/"; return 1; }
 
-  # Сортируем и убираем дубли
   local unique
   mapfile -t unique < <(printf "%s\n" "${found[@]}" | sort -u)
 
@@ -1003,15 +963,13 @@ do_uninstall() {
   rm -f /etc/network/if-pre-up.d/iptables-nat 2>/dev/null || true
 
   info "Удаляем UFW правила AmneziaWG..."
-  # FIX: pipefail-safe — subshell изолирован
-  (
-    set +o pipefail
-    ufw status numbered 2>/dev/null | grep -i "AmneziaWG" | \
-      awk -F'[][]' '{print $2}' | sort -rn | \
-      while read -r num; do
-        ufw --force delete "$num" 2>/dev/null || true
-      done
-  ) || true
+  if command -v ufw &>/dev/null; then
+    local rule_nums
+    rule_nums=$(ufw status numbered 2>/dev/null | grep -i "AmneziaWG" | grep -oE '\[[0-9]+\]' | tr -d '[]' | sort -rn)
+    for num in $rule_nums; do
+      echo "y" | ufw --force delete "$num" 2>/dev/null || true
+    done
+  fi
 
   info "Удаляем NAT iptables правила..."
   local ext_if
@@ -1029,16 +987,16 @@ do_uninstall() {
 # ══════════════════════════════════════════════════════════
 # ГЛАВНЫЙ ЦИКЛ
 # ══════════════════════════════════════════════════════════
-# Инициализируем глобальные переменные
 CHOICE=""
 CLIENT_DNS="1.1.1.1, 1.0.0.1"
 AWG_VERSION="2.0"
 I1=""
 AWG_PARAMS_LINES=""
 
-# Создаём лог-файл с правильными правами
 touch "$LOG_FILE" 2>/dev/null && chmod 600 "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/awg-manager.log"
 log_info "=== AWG Manager запущен (PID=$$, USER=$(whoami)) ==="
+
+trap 'rm -f /tmp/awg_tmp_* 2>/dev/null || true' EXIT
 
 while true; do
   show_header
