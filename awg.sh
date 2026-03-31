@@ -40,13 +40,13 @@ get_public_ip() {
   echo ""
 }
 
-# ── Генерация случайного числа без overflow ────────────────
+# ── Генерация случайного числа ─────────────────────────────
 rand_range() {
   local lo="$1" hi="$2"
   python3 -c "import random; print(random.randint($lo, $hi))"
 }
 
-# ── Поиск свободного IP, исключая IP сервера ───────────────
+# ── Поиск свободного IP ────────────────────────────────────
 find_free_ip() {
   local base="$1"
   local srv_ip_oct=""
@@ -90,7 +90,7 @@ show_header() {
   s=$(get_status)
   IFS='|' read -r ip port st clients <<< "$s"
   echo -e "${B}╔══════════════════════════════════════════════╗${N}"
-  echo -e "${B}║${W}        AmneziaWG Manager v3.4                ${B}║${N}"
+  echo -e "${B}║${W}        AmneziaWG Manager v3.5                ${B}║${N}"
   echo -e "${B}╚══════════════════════════════════════════════╝${N}"
   echo -e "${B}  IP сервера : ${W}$ip${N}"
   echo -e "${B}  Порт       : ${W}$port${N}"
@@ -114,7 +114,7 @@ show_menu() {
 }
 
 # ══════════════════════════════════════════════════════════
-# ОБЩИЕ: выбор DNS
+# ВЫБОР DNS
 # ══════════════════════════════════════════════════════════
 choose_dns() {
   CLIENT_DNS=""
@@ -135,7 +135,7 @@ choose_dns() {
 }
 
 # ══════════════════════════════════════════════════════════
-# ОБЩИЕ: выбор версии AWG
+# ВЫБОР ВЕРСИИ AWG
 # ══════════════════════════════════════════════════════════
 choose_awg_version() {
   AWG_VERSION=""
@@ -157,7 +157,7 @@ choose_awg_version() {
 }
 
 # ══════════════════════════════════════════════════════════
-# ОБЩИЕ: генерация AWG параметров
+# ГЕНЕРАЦИЯ AWG ПАРАМЕТРОВ (ИСПРАВЛЕНА)
 # ══════════════════════════════════════════════════════════
 gen_awg_params() {
   local ver="$1"
@@ -177,22 +177,40 @@ gen_awg_params() {
   Q=1073741823
 
   if [[ "$ver" == "2.0" ]]; then
+    # AWG 2.0: S3, S4 и диапазоны H1-H4
     local S3 S4
-    local H1_S H1_W H1 H2_S H2_W H2 H3_S H3_W H3 H4_S H4_W H4
+    local H1_START H1_END H1
+    local H2_START H2_END H2
+    local H3_START H3_END H3
+    local H4_START H4_END H4
+    
     S3=$(rand_range 5 34)
     S4=$(rand_range 1 16)
-    H1_S=$(rand_range 0 $((Q - 1)))
-    H1_W=$(rand_range 30000 130000)
-    H1="${H1_S}-$((H1_S + H1_W))"
-    H2_S=$(rand_range $Q $((Q * 2 - 1)))
-    H2_W=$(rand_range 30000 130000)
-    H2="${H2_S}-$((H2_S + H2_W))"
-    H3_S=$(rand_range $((Q * 2)) $((Q * 3 - 1)))
-    H3_W=$(rand_range 30000 130000)
-    H3="${H3_S}-$((H3_S + H3_W))"
-    H4_S=$(rand_range $((Q * 3)) $((Q * 4 - 1)))
-    H4_W=$(rand_range 30000 130000)
-    H4="${H4_S}-$((H4_S + H4_W))"
+    
+    # H1: квадрант 0 [0, Q-1]
+    H1_START=$(rand_range 0 $((Q - 1)))
+    H1_END=$(rand_range $((H1_START + 30000)) $((H1_START + 130000)))
+    [[ $H1_END -gt $((Q - 1)) ]] && H1_END=$((Q - 1))
+    H1="${H1_START}-${H1_END}"
+    
+    # H2: квадрант 1 [Q, 2Q-1]
+    H2_START=$(rand_range $Q $((Q * 2 - 1)))
+    H2_END=$(rand_range $((H2_START + 30000)) $((H2_START + 130000)))
+    [[ $H2_END -gt $((Q * 2 - 1)) ]] && H2_END=$((Q * 2 - 1))
+    H2="${H2_START}-${H2_END}"
+    
+    # H3: квадрант 2 [2Q, 3Q-1]
+    H3_START=$(rand_range $((Q * 2)) $((Q * 3 - 1)))
+    H3_END=$(rand_range $((H3_START + 30000)) $((H3_START + 130000)))
+    [[ $H3_END -gt $((Q * 3 - 1)) ]] && H3_END=$((Q * 3 - 1))
+    H3="${H3_START}-${H3_END}"
+    
+    # H4: квадрант 3 [3Q, 4Q-1]
+    H4_START=$(rand_range $((Q * 3)) $((Q * 4 - 1)))
+    H4_END=$(rand_range $((H4_START + 30000)) $((H4_START + 130000)))
+    [[ $H4_END -gt $((Q * 4 - 1)) ]] && H4_END=$((Q * 4 - 1))
+    H4="${H4_START}-${H4_END}"
+    
     AWG_PARAMS_LINES="Jc = $Jc
 Jmin = $Jmin
 Jmax = $Jmax
@@ -204,7 +222,26 @@ H1 = $H1
 H2 = $H2
 H3 = $H3
 H4 = $H4"
-  else
+    
+  elif [[ "$ver" == "1.5" ]]; then
+    # AWG 1.5: S1, S2, одиночные H1-H4, с I1
+    local H1 H2 H3 H4
+    H1=$(rand_range 0 $((Q - 1)))
+    H2=$(rand_range $Q $((Q * 2 - 1)))
+    H3=$(rand_range $((Q * 2)) $((Q * 3 - 1)))
+    H4=$(rand_range $((Q * 3)) $((Q * 4 - 1)))
+    AWG_PARAMS_LINES="Jc = $Jc
+Jmin = $Jmin
+Jmax = $Jmax
+S1 = $S1
+S2 = $S2
+H1 = $H1
+H2 = $H2
+H3 = $H3
+H4 = $H4"
+    
+  else # AWG 1.0
+    # AWG 1.0: только S1, S2, одиночные H1-H4, без I1
     local H1 H2 H3 H4
     H1=$(rand_range 0 $((Q - 1)))
     H2=$(rand_range $Q $((Q * 2 - 1)))
@@ -223,7 +260,7 @@ H4 = $H4"
 }
 
 # ══════════════════════════════════════════════════════════
-# ОБЩИЕ: fetch I1 через API с fallback chain
+# FETCH I1 ЧЕРЕЗ API
 # ══════════════════════════════════════════════════════════
 fetch_i1_from_api() {
   local domain="$1"
@@ -290,7 +327,7 @@ fetch_i1_from_api() {
 }
 
 # ══════════════════════════════════════════════════════════
-# ОБЩИЕ: выбор I1 (только для AWG 1.5 и 2.0)
+# ВЫБОР I1
 # ══════════════════════════════════════════════════════════
 choose_i1() {
   I1=""
@@ -317,7 +354,7 @@ choose_i1() {
 }
 
 # ══════════════════════════════════════════════════════════
-# Валидация MTU (576-1500)
+# ВАЛИДАЦИИ
 # ══════════════════════════════════════════════════════════
 validate_mtu() {
   local mtu="$1"
@@ -326,9 +363,6 @@ validate_mtu() {
   return 0
 }
 
-# ══════════════════════════════════════════════════════════
-# Валидация IP в формате X.X.X.X/32
-# ══════════════════════════════════════════════════════════
 validate_ip_cidr() {
   local ip="$1"
   [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]] || {
@@ -339,7 +373,7 @@ validate_ip_cidr() {
 }
 
 # ══════════════════════════════════════════════════════════
-# Парсинг AWG параметров из серверного конфига
+# ПАРСИНГ AWG ПАРАМЕТРОВ ИЗ КОНФИГА
 # ══════════════════════════════════════════════════════════
 extract_awg_params() {
   local conf="$1"
@@ -702,13 +736,10 @@ do_add_client() {
   local detected_ver="wg"
   if grep -q "^S3 = " "$SERVER_CONF" 2>/dev/null; then
     detected_ver="2.0"
-  elif grep -q "^H1 = " "$SERVER_CONF" 2>/dev/null && grep -q "^H2 = " "$SERVER_CONF" && \
-       grep -q "^H3 = " "$SERVER_CONF" && grep -q "^H4 = " "$SERVER_CONF"; then
-    if grep -q "^I1 = " "$SERVER_CONF" 2>/dev/null; then
-      detected_ver="1.5"
-    else
-      detected_ver="1.0"
-    fi
+  elif grep -q "^I1 = " "$SERVER_CONF" 2>/dev/null; then
+    detected_ver="1.5"
+  elif grep -q "^Jc = " "$SERVER_CONF" 2>/dev/null; then
+    detected_ver="1.0"
   fi
   info "Версия сервера: $detected_ver — клиент будет совместим"
 
