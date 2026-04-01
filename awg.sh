@@ -508,7 +508,7 @@ do_install() {
     -o Dpkg::Options::="--force-confold"
 
   hdr "=== Зависимости ==="
-  apt-get install -y -q \
+    apt-get install -y -q \
     software-properties-common \
     python3-launchpadlib \
     python3 \
