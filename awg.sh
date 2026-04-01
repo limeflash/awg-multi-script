@@ -1,6 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
+# ─────────────────────────────────────────────────────────────
+# AmneziaWG Manager v4.0 — с генератором мимикрии
+# Основан на AmneziaWG Architect domain pools
+# ─────────────────────────────────────────────────────────────
+
 # ── Цвета ──────────────────────────────────────────────────
 R='\033[0;31m'; G='\033[0;32m'; Y='\033[0;33m'
 B='\033[0;34m'; C='\033[0;36m'; W='\033[1;37m'; N='\033[0m'
@@ -27,9 +32,229 @@ log_warn()  { _log "WARN"  "$@"; }
 log_err()   { _log "ERROR" "$@"; }
 log_debug() { _log "DEBUG" "$@"; }
 
-# ── Константа I1 Google DNS (fallback) ────────────────────
-I1_GOOGLE='<b 0x84050100000100000000000006676f6f676c6503636f6d0000010001>'
-I1_YANDEX='<b 0x084481800001000300000000077469636b65747306776964676574096b696e6f706f69736b0272750000010001c00c0005000100000039001806776964676574077469636b6574730679616e646578c025c0390005000100000039002b1765787465726e616c2d7469636b6574732d776964676574066166697368610679616e646578036e657400c05d000100010000001c000457fafe25>'
+# ══════════════════════════════════════════════════════════
+# ДОМЕННЫЕ ПУЛЫ ДЛЯ МИМИКРИИ (на основе AmneziaWG Architect)
+# ══════════════════════════════════════════════════════════
+
+# QUIC Initial пул (HTTP/3, CDN) — наиболее надёжный в 2026
+QUIC_INITIAL_DOMAINS=(
+  "yandex.net" "yastatic.net" "vk.com" "mycdn.me" "mail.ru"
+  "ozon.ru" "wildberries.ru" "wbstatic.net" "sber.ru" "tbank.ru"
+  "gosuslugi.ru" "gcore.com" "fastly.net" "cloudfront.net"
+  "microsoft.com" "icloud.com" "github.com" "cdn.jsdelivr.net"
+  "wikipedia.org" "dropbox.com" "steamstatic.com" "spotify.com"
+  "akamaiedge.net" "msedge.net" "azureedge.net"
+)
+
+# QUIC 0-RTT пул (Early Data)
+QUIC_0RTT_DOMAINS=(
+  "yandex.net" "vk.com" "mail.ru" "ozon.ru" "wildberries.ru"
+  "sber.ru" "tbank.ru" "gosuslugi.ru" "gcore.com" "fastly.net"
+  "cloudfront.net" "microsoft.com" "github.com" "cdn.jsdelivr.net"
+  "wikipedia.org" "spotify.com"
+)
+
+# TLS 1.3 Client Hello пул (HTTPS)
+TLS_CLIENT_HELLO_DOMAINS=(
+  "yandex.ru" "vk.com" "mail.ru" "ozon.ru" "wildberries.ru"
+  "sberbank.ru" "tbank.ru" "gosuslugi.ru" "kaspersky.ru"
+  "github.com" "gitlab.com" "stackoverflow.com" "microsoft.com"
+  "apple.com" "amazon.com" "cloudflare.com" "google.com"
+  "jetbrains.com" "docker.com" "ubuntu.com" "debian.org"
+)
+
+# DTLS пул (WebRTC/STUN)
+DTLS_DOMAINS=(
+  "stun.yandex.net" "stun.vk.com" "stun.mail.ru" "stun.sber.ru"
+  "stun.stunprotocol.org" "stun.voipbuster.com" "meet.jit.si"
+  "stun.services.mozilla.com" "stun.zoiper.com" "stun.counterpath.com"
+  "stun.sipgate.net" "stun.ekiga.net" "stun.ideasip.com"
+)
+
+# SIP пул (VoIP)
+SIP_DOMAINS=(
+  "sip.beeline.ru" "sip.mts.ru" "sip.megafon.ru" "sip.rostelecom.ru"
+  "sip.yandex.ru" "sip.vk.com" "sip.mail.ru" "sip.sipnet.ru"
+  "sip.zadarma.com" "sip.iptel.org" "sip.linphone.org"
+  "sip.antisip.com" "sip.voipbuster.com" "sip.3cx.com"
+)
+
+# ── Выбор случайного домена из пула ────────────────────────
+select_random_domain() {
+  local profile="$1"
+  local domains=()
+  
+  case "$profile" in
+    "quic_initial")   domains=("${QUIC_INITIAL_DOMAINS[@]}") ;;
+    "quic_0rtt")      domains=("${QUIC_0RTT_DOMAINS[@]}") ;;
+    "tls")            domains=("${TLS_CLIENT_HELLO_DOMAINS[@]}") ;;
+    "dtls")           domains=("${DTLS_DOMAINS[@]}") ;;
+    "sip")            domains=("${SIP_DOMAINS[@]}") ;;
+    *)                domains=("${QUIC_INITIAL_DOMAINS[@]}") ;;
+  esac
+  
+  if [[ ${#domains[@]} -eq 0 ]]; then
+    echo "yandex.net"
+  else
+    echo "${domains[$((RANDOM % ${#domains[@]}))]}"
+  fi
+}
+
+# ══════════════════════════════════════════════════════════
+# FETCH I1 ЧЕРЕЗ API (с улучшенной обработкой)
+# ══════════════════════════════════════════════════════════
+fetch_i1_from_api() {
+  local domain="$1"
+  local api_url="https://junk.web2core.workers.dev/signature?domain=${domain}"
+  local api_resp i1_val=""
+
+  log_info "fetch_i1_from_api: domain=$domain"
+
+  api_resp=$(curl -s --connect-timeout 10 "$api_url" 2>/dev/null) || api_resp=""
+  log_debug "API raw response (first 200): ${api_resp:0:200}"
+
+  if [[ -n "$api_resp" ]]; then
+    # Python3 парсинг
+    i1_val=$(echo "$api_resp" | python3 -c \
+      "import sys,json; d=json.load(sys.stdin); print(d.get('i1',''))" \
+      2>/dev/null) || i1_val=""
+    
+    # fallback через jq
+    if [[ -z "$i1_val" ]] && command -v jq &>/dev/null; then
+      i1_val=$(echo "$api_resp" | jq -r '.i1 // empty' 2>/dev/null) || i1_val=""
+    fi
+
+    # fallback через grep
+    if [[ -z "$i1_val" ]]; then
+      i1_val=$(echo "$api_resp" | grep -oP '"i1"\s*:\s*"\K[^"]+' 2>/dev/null) || i1_val=""
+    fi
+  fi
+
+  if [[ -z "$i1_val" ]]; then
+    log_warn "API не вернул I1 для $domain"
+    echo ""
+    return 1
+  fi
+
+  # Нормализация I1
+  i1_val=$(echo "$i1_val" | sed 's/^"//;s/"$//')
+  
+  # Исправляем <b0x на <b 0x если нужно
+  if [[ "$i1_val" =~ ^\<b0x ]]; then
+    i1_val="${i1_val/<b0x/<b 0x}"
+    log_warn "I1: добавлен пробел после <b"
+  fi
+
+  # Проверка формата (должен быть CPS цепочкой)
+  if [[ ! "$i1_val" =~ ^\<b\ 0x ]]; then
+    log_err "I1 неверный формат для $domain"
+    echo ""
+    return 1
+  fi
+
+  log_info "I1 получен для $domain (длина: ${#i1_val})"
+  echo "$i1_val"
+  return 0
+}
+
+# ══════════════════════════════════════════════════════════
+# ВЫБОР ПРОФИЛЯ МИМИКРИИ + ГЕНЕРАЦИЯ I1
+# ══════════════════════════════════════════════════════════
+choose_mimicry_profile() {
+  I1=""
+  MIMICRY_PROFILE=""
+  MIMICRY_DOMAIN=""
+  
+  hdr "Профили мимикрии (AmneziaWG Architect):"
+  echo -e "  ${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+  echo "  ${W}1)${N} QUIC Initial (HTTP/3) — наиболее надёжный в 2026"
+  echo "  ${W}2)${N} QUIC 0-RTT (Early Data) — быстрый старт"
+  echo "  ${W}3)${N} TLS 1.3 Client Hello — HTTPS (наибольшая совместимость)"
+  echo "  ${W}4)${N} DTLS 1.3 (WebRTC/STUN) — видеозвонки"
+  echo "  ${W}5)${N} SIP (VoIP) — телефонные звонки"
+  echo -e "  ${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+  echo "  ${W}6)${N} Случайный домен из любого пула"
+  echo "  ${W}7)${N} Ручной ввод домена (API запрос)"
+  echo "  ${W}8)${N} Без имитации (только обфускация)"
+  
+  read -rp "$(echo -e "${C}  Выбор [1-8] (Enter = 1): ${N}")" PROFILE_CHOICE
+  PROFILE_CHOICE=${PROFILE_CHOICE:-1}
+  
+  local domain=""
+  case $PROFILE_CHOICE in
+    1)
+      MIMICRY_PROFILE="quic_initial"
+      domain=$(select_random_domain "quic_initial")
+      info "Выбран QUIC Initial, домен: $domain"
+      ;;
+    2)
+      MIMICRY_PROFILE="quic_0rtt"
+      domain=$(select_random_domain "quic_0rtt")
+      info "Выбран QUIC 0-RTT, домен: $domain"
+      ;;
+    3)
+      MIMICRY_PROFILE="tls"
+      domain=$(select_random_domain "tls")
+      info "Выбран TLS 1.3, домен: $domain"
+      ;;
+    4)
+      MIMICRY_PROFILE="dtls"
+      domain=$(select_random_domain "dtls")
+      info "Выбран DTLS, домен: $domain"
+      ;;
+    5)
+      MIMICRY_PROFILE="sip"
+      domain=$(select_random_domain "sip")
+      info "Выбран SIP, домен: $domain"
+      ;;
+    6)
+      local profiles=("quic_initial" "quic_0rtt" "tls" "dtls" "sip")
+      MIMICRY_PROFILE="${profiles[$((RANDOM % ${#profiles[@]}))]}"
+      domain=$(select_random_domain "$MIMICRY_PROFILE")
+      info "Случайный профиль: $MIMICRY_PROFILE, домен: $domain"
+      ;;
+    7)
+      read -rp "  Введите домен (например: cloudflare.com): " domain
+      if [[ -z "$domain" ]]; then
+        warn "Домен не введён"
+        return 1
+      fi
+      info "Ручной ввод: $domain"
+      ;;
+    8)
+      I1=""
+      MIMICRY_PROFILE="none"
+      ok "Без имитации"
+      return 0
+      ;;
+    *)
+      MIMICRY_PROFILE="quic_initial"
+      domain=$(select_random_domain "quic_initial")
+      info "По умолчанию: QUIC Initial, домен: $domain"
+      ;;
+  esac
+  
+  # Если выбран не "без имитации" и есть домен — запрашиваем I1
+  if [[ "$PROFILE_CHOICE" != "8" ]] && [[ -n "$domain" ]]; then
+    info "Запрос I1 для $domain..."
+    I1=$(fetch_i1_from_api "$domain")
+    if [[ -z "$I1" ]]; then
+      warn "Не удалось получить I1 для $domain"
+      echo -e "${Y}  Совет: проверь интернет или выбери другой домен${N}"
+      read -rp "$(echo -e "${C}  Продолжить без I1? [y/N]: ${N}")" CONTINUE
+      if [[ ! "$CONTINUE" =~ ^[Yy]$ ]]; then
+        return 1
+      fi
+      I1=""
+    else
+      ok "I1 получен для $domain (длина: ${#I1})"
+    fi
+  fi
+}
+
+# ══════════════════════════════════════════════════════════
+# ОСТАЛЬНЫЕ ФУНКЦИИ (статус, IP, генерация параметров и т.д.)
+# ══════════════════════════════════════════════════════════
 
 # ── Получение публичного IP ────────────────────────────────
 get_public_ip() {
@@ -90,7 +315,8 @@ show_header() {
   s=$(get_status)
   IFS='|' read -r ip port st clients <<< "$s"
   echo -e "${B}╔══════════════════════════════════════════════╗${N}"
-  echo -e "${B}║${W}        AmneziaWG Manager v3.5                ${B}║${N}"
+  echo -e "${B}║${W}        AmneziaWG Manager v4.0                ${B}║${N}"
+  echo -e "${B}║${C}     С генератором мимикрии (QUIC/TLS/DTLS)   ${B}║${N}"
   echo -e "${B}╚══════════════════════════════════════════════╝${N}"
   echo -e "${B}  IP сервера : ${W}$ip${N}"
   echo -e "${B}  Порт       : ${W}$port${N}"
@@ -102,12 +328,13 @@ show_header() {
 show_menu() {
   echo ""
   echo -e "  ${W}1)${N} Установка зависимостей и AmneziaWG"
-  echo -e "  ${W}2)${N} Создать сервер + первый клиент"
+  echo -e "  ${W}2)${N} Создать сервер + первый клиент (с мимикрией)"
   echo -e "  ${W}3)${N} Добавить клиента"
   echo -e "  ${W}4)${N} Показать клиентов"
   echo -e "  ${W}5)${N} Показать QR клиента"
   echo -e "  ${W}6)${N} Перезапустить awg0"
   echo -e "  ${W}7)${N} Удалить всё"
+  echo -e "  ${W}8)${N} Проверить домены из пулов (ping)"
   echo -e "  ${W}0)${N} Выход"
   echo ""
   read -rp "$(echo -e "${C}  Выбор: ${N}")" CHOICE
@@ -122,14 +349,16 @@ choose_dns() {
   echo "  1) Cloudflare  — 1.1.1.1, 1.0.0.1"
   echo "  2) Google      — 8.8.8.8, 8.8.4.4"
   echo "  3) OpenDNS     — 208.67.222.222, 208.67.220.220"
-  echo "  4) Вручную"
-  read -rp "$(echo -e "${C}  Выбор [1-4] (Enter = Cloudflare): ${N}")" DNS_CHOICE
+  echo "  4) Яндекс DNS  — 77.88.8.8, 77.88.8.1"
+  echo "  5) Вручную"
+  read -rp "$(echo -e "${C}  Выбор [1-5] (Enter = Cloudflare): ${N}")" DNS_CHOICE
   DNS_CHOICE=${DNS_CHOICE:-1}
   case $DNS_CHOICE in
     1) CLIENT_DNS="1.1.1.1, 1.0.0.1" ;;
     2) CLIENT_DNS="8.8.8.8, 8.8.4.4" ;;
     3) CLIENT_DNS="208.67.222.222, 208.67.220.220" ;;
-    4) read -rp "  DNS: " CLIENT_DNS ;;
+    4) CLIENT_DNS="77.88.8.8, 77.88.8.1" ;;
+    5) read -rp "  DNS: " CLIENT_DNS ;;
     *) CLIENT_DNS="1.1.1.1, 1.0.0.1" ;;
   esac
 }
@@ -140,7 +369,7 @@ choose_dns() {
 choose_awg_version() {
   AWG_VERSION=""
   hdr "Версия протокола:"
-  echo "  1) AWG 2.0  — S3/S4 + H1-H4 диапазоны + I1-I5  (рекомендуется)"
+  echo "  1) AWG 2.0  — S3/S4 + H1-H4 диапазоны + I1-I5 (рекомендуется)"
   echo "  2) AWG 1.5  — H1-H4 одиночные + I1-I5, без S3/S4"
   echo "  3) AWG 1.0  — Jc/Jmin/Jmax + S1/S2 + H1-H4 одиночные, без I1-I5"
   echo "  4) WireGuard — без обфускации"
@@ -157,7 +386,7 @@ choose_awg_version() {
 }
 
 # ══════════════════════════════════════════════════════════
-# ГЕНЕРАЦИЯ AWG ПАРАМЕТРОВ (ИСПРАВЛЕНА)
+# ГЕНЕРАЦИЯ AWG ПАРАМЕТРОВ (исправлена для AWG 2.0)
 # ══════════════════════════════════════════════════════════
 gen_awg_params() {
   local ver="$1"
@@ -166,7 +395,7 @@ gen_awg_params() {
   [[ "$ver" == "wg" ]] && return 0
 
   local Jc Jmin Jmax S1 S2 S2_OFF Q
-  Jc=$(rand_range 2 10)
+  Jc=$(rand_range 3 7)  # Jc 3-7 оптимальный баланс
   Jmin=64
   Jmax=$(rand_range 576 1024)
   S1=$(rand_range 10 39)
@@ -224,7 +453,7 @@ H3 = $H3
 H4 = $H4"
     
   elif [[ "$ver" == "1.5" ]]; then
-    # AWG 1.5: S1, S2, одиночные H1-H4, с I1
+    # AWG 1.5: S1, S2, одиночные H1-H4
     local H1 H2 H3 H4
     H1=$(rand_range 0 $((Q - 1)))
     H2=$(rand_range $Q $((Q * 2 - 1)))
@@ -241,7 +470,6 @@ H3 = $H3
 H4 = $H4"
     
   else # AWG 1.0
-    # AWG 1.0: только S1, S2, одиночные H1-H4, без I1
     local H1 H2 H3 H4
     H1=$(rand_range 0 $((Q - 1)))
     H2=$(rand_range $Q $((Q * 2 - 1)))
@@ -257,145 +485,6 @@ H2 = $H2
 H3 = $H3
 H4 = $H4"
   fi
-}
-
-# ══════════════════════════════════════════════════════════
-# FETCH I1 ЧЕРЕЗ API
-# ══════════════════════════════════════════════════════════
-fetch_i1_from_api() {
-  local domain="$1"
-  local api_url="https://junk.web2core.workers.dev/signature?domain=${domain}"
-  local api_resp i1_val=""
-
-  log_info "fetch_i1_from_api: domain=$domain"
-
-  api_resp=$(curl -s --connect-timeout 10 "$api_url" 2>/dev/null) || api_resp=""
-  log_debug "API raw response (first 200): ${api_resp:0:200}"
-
-  if [[ -n "$api_resp" ]]; then
-    i1_val=$(echo "$api_resp" | python3 -c \
-      "import sys,json; d=json.load(sys.stdin); print(d.get('i1',''))" \
-      2>/dev/null) || i1_val=""
-    log_debug "python3 i1 (first 80): ${i1_val:0:80}"
-
-    if [[ -z "$i1_val" ]] && command -v jq &>/dev/null; then
-      i1_val=$(echo "$api_resp" | jq -r '.i1 // empty' 2>/dev/null) || i1_val=""
-      log_debug "jq i1 (first 80): ${i1_val:0:80}"
-    fi
-
-    if [[ -z "$i1_val" ]]; then
-      i1_val=$(echo "$api_resp" | grep -oP '"i1"\s*:\s*"\K[^"]+' 2>/dev/null) || i1_val=""
-      log_debug "grep i1 (first 80): ${i1_val:0:80}"
-    fi
-  else
-    log_warn "API вернул пустой ответ"
-  fi
-
-  if [[ -z "$i1_val" ]]; then
-    warn "API недоступен — fallback Google DNS" >&2
-    log_warn "fetch_i1_from_api: fallback Google DNS"
-    echo "$I1_GOOGLE"
-    return 0
-  fi
-
-  log_info "I1 до нормализации (first 100): ${i1_val:0:100}"
-  i1_val=$(echo "$i1_val" | sed 's/^"//;s/"$//')
-
-  if [[ "$i1_val" =~ ^\<b0x ]]; then
-    i1_val="${i1_val/<b0x/<b 0x}"
-    warn "API вернул I1 без пробела — исправлено" >&2
-    log_warn "I1: добавлен пробел после <b"
-  fi
-
-  if [[ ! "$i1_val" =~ ^\<b\ 0x ]]; then
-    warn "I1 из API неверный формат — fallback Google DNS" >&2
-    log_err "I1 неверный формат: ${i1_val:0:100}"
-    echo "$I1_GOOGLE"
-    return 0
-  fi
-
-  if [[ ! "$i1_val" =~ \>$ ]]; then
-    warn "I1 из API не закрыт '>' — fallback Google DNS" >&2
-    log_err "I1 не закрыт >: ${i1_val: -20}"
-    echo "$I1_GOOGLE"
-    return 0
-  fi
-
-  log_info "I1 валиден: ${i1_val:0:60}..."
-  ok "I1 получен с API" >&2
-  echo "$i1_val"
-}
-
-# ══════════════════════════════════════════════════════════
-# ВЫБОР I1
-# ══════════════════════════════════════════════════════════
-choose_i1() {
-  I1=""
-  hdr "Имитация протокола (I1):"
-  echo "  1) Google DNS — статический (совместим со всеми)"
-  echo "  2) Яндекс/Кинопоиск DNS — статический"
-  echo "  3) API по домену — QUIC реальный пакет"
-  echo "  4) Без имитации"
-  read -rp "$(echo -e "${C}  Выбор [1-4] (Enter = Google): ${N}")" I1_CHOICE
-  I1_CHOICE=${I1_CHOICE:-1}
-  case $I1_CHOICE in
-    1) I1="$I1_GOOGLE" ;;
-    2) I1="$I1_YANDEX" ;;
-    3)
-      local domain
-      read -rp "  Домен (Enter = google.com): " domain
-      domain=${domain:-google.com}
-      info "запрос к API для $domain..."
-      I1=$(fetch_i1_from_api "$domain")
-      ;;
-    4) I1="" ;;
-    *) I1="$I1_GOOGLE" ;;
-  esac
-}
-
-# ══════════════════════════════════════════════════════════
-# ВАЛИДАЦИИ
-# ══════════════════════════════════════════════════════════
-validate_mtu() {
-  local mtu="$1"
-  [[ "$mtu" =~ ^[0-9]+$ ]] || { err "MTU должен быть числом"; return 1; }
-  [[ "$mtu" -ge 576 && "$mtu" -le 1500 ]] || { err "MTU должен быть 576-1500"; return 1; }
-  return 0
-}
-
-validate_ip_cidr() {
-  local ip="$1"
-  [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]] || {
-    err "Неверный формат IP: $ip (ожидается X.X.X.X/NN)"
-    return 1
-  }
-  return 0
-}
-
-# ══════════════════════════════════════════════════════════
-# ПАРСИНГ AWG ПАРАМЕТРОВ ИЗ КОНФИГА
-# ══════════════════════════════════════════════════════════
-extract_awg_params() {
-  local conf="$1"
-  local result=""
-  local has_s3=false
-  grep -q "^S3 = " "$conf" 2>/dev/null && has_s3=true
-  
-  for key in Jc Jmin Jmax S1 S2 H1 H2 H3 H4; do
-    local line
-    line=$(grep "^${key} = " "$conf" 2>/dev/null | head -1 || true)
-    [[ -n "$line" ]] && result+="${line}"$'\n'
-  done
-  
-  if $has_s3; then
-    for key in S3 S4; do
-      local line
-      line=$(grep "^${key} = " "$conf" 2>/dev/null | head -1 || true)
-      [[ -n "$line" ]] && result+="${line}"$'\n'
-    done
-  fi
-  
-  echo "${result%$'\n'}"
 }
 
 # ══════════════════════════════════════════════════════════
@@ -489,7 +578,7 @@ EOF
 }
 
 # ══════════════════════════════════════════════════════════
-# 2. СОЗДАТЬ СЕРВЕР
+# 2. СОЗДАТЬ СЕРВЕР (с мимикрией)
 # ══════════════════════════════════════════════════════════
 do_gen() {
   log_info "do_gen: старт"
@@ -502,11 +591,9 @@ do_gen() {
 
   choose_awg_version
   choose_dns
-
-  I1=""
-  if [[ "$AWG_VERSION" == "1.5" || "$AWG_VERSION" == "2.0" ]]; then
-    choose_i1
-  fi
+  
+  # Выбор профиля мимикрии
+  choose_mimicry_profile || return 1
 
   hdr "IP подсеть сервера:"
   echo "  1) 10.100.0.0/24"
@@ -525,40 +612,30 @@ do_gen() {
     4) CLIENT_ADDR="10.103.0.2/32"; SERVER_ADDR="10.103.0.1/24"; CLIENT_NET="10.103.0.0/24" ;;
     5)
       read -rp "  IP клиента (X.X.X.X/32): " CLIENT_ADDR
-      validate_ip_cidr "$CLIENT_ADDR" || return 1
       read -rp "  IP сервера (X.X.X.X/24): " SERVER_ADDR
-      validate_ip_cidr "$SERVER_ADDR" || return 1
       read -rp "  Подсеть NAT (X.X.X.0/24): " CLIENT_NET
-      validate_ip_cidr "$CLIENT_NET" || return 1
       ;;
     *) CLIENT_ADDR="10.100.0.2/32"; SERVER_ADDR="10.100.0.1/24"; CLIENT_NET="10.100.0.0/24" ;;
   esac
 
-  [[ "$CLIENT_NET" =~ ^10\.|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[0-1])\. ]] || {
-    err "только private сети (10.x, 192.168.x, 172.16-31.x)"
-    return 1
-  }
-
   hdr "MTU:"
   echo "  1) 1420 — стандартный"
-  echo "  2) 1380 — лучше для мобильных"
+  echo "  2) 1380 — лучше для мобильных (рекомендуется)"
   echo "  3) 1280 — максимальная совместимость"
-  echo "  4) Вручную"
+  echo "  4) 1500 — Ethernet"
+  echo "  5) Вручную"
   local MTU_CHOICE MTU=""
-  read -rp "$(echo -e "${C}  Выбор [1-4] (Enter = 1380): ${N}")" MTU_CHOICE
+  read -rp "$(echo -e "${C}  Выбор [1-5] (Enter = 1380): ${N}")" MTU_CHOICE
   MTU_CHOICE=${MTU_CHOICE:-2}
   case $MTU_CHOICE in
-    1) MTU=1420 ;; 2) MTU=1380 ;; 3) MTU=1280 ;;
-    4)
-      read -rp "  MTU (576-1500): " MTU
-      validate_mtu "$MTU" || return 1
-      ;;
+    1) MTU=1420 ;; 2) MTU=1380 ;; 3) MTU=1280 ;; 4) MTU=1500 ;;
+    5) read -rp "  MTU (576-1500): " MTU ;;
     *) MTU=1380 ;;
   esac
 
   hdr "Порт сервера:"
-  local PORT=""
-  read -rp "$(echo -e "${C}  Порт [51820 / r = случайный]: ${N}")" PORT
+  echo -e "${Y}  Для QUIC/TLS мимикрии рекомендуется порт 443${N}"
+  read -rp "$(echo -e "${C}  Порт [51820 / 443 / r = случайный]: ${N}")" PORT
   if [[ "${PORT:-}" == "r" || "${PORT:-}" == "R" ]]; then
     PORT=$(rand_range 30001 65535)
     ok "случайный порт: $PORT"
@@ -571,12 +648,14 @@ do_gen() {
 
   echo ""
   echo -e "${W}  Параметры:${N}"
-  echo "  Версия: $AWG_VERSION"
-  echo "  DNS:    $CLIENT_DNS"
-  echo "  Клиент: $CLIENT_ADDR"
-  echo "  Сервер: $SERVER_ADDR"
-  echo "  MTU:    $MTU"
-  echo "  Порт:   $PORT"
+  echo "  Версия:   $AWG_VERSION"
+  echo "  DNS:      $CLIENT_DNS"
+  echo "  Мимикрия: ${MIMICRY_PROFILE:-none}"
+  echo "  I1:       ${I1:+получен (${#I1} байт)}"
+  echo "  Клиент:   $CLIENT_ADDR"
+  echo "  Сервер:   $SERVER_ADDR"
+  echo "  MTU:      $MTU"
+  echo "  Порт:     $PORT"
   read -rp "$(echo -e "${C}  Продолжить? [Y/n]: ${N}")" CONFIRM
   CONFIRM=${CONFIRM:-y}
   [[ $CONFIRM =~ ^[Yy]$ ]] || { warn "Отменено."; return 0; }
@@ -597,14 +676,8 @@ do_gen() {
   AWG_PARAMS_LINES=""
   gen_awg_params "$AWG_VERSION"
 
-  log_info "do_gen: ver=$AWG_VERSION port=$PORT mtu=$MTU srv=$SERVER_ADDR cli=$CLIENT_ADDR net=$CLIENT_NET iface=$iface"
-  log_info "do_gen: I1=${I1:0:60}"
-  log_info "do_gen: AWG_PARAMS=${AWG_PARAMS_LINES//$'\n'/ | }"
-
   echo 1 > /proc/sys/net/ipv4/ip_forward
-  grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf || \
-    echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-  sysctl -p 2>/dev/null || warn "sysctl содержит лишние строки — проверь /etc/sysctl.conf"
+  sysctl -p 2>/dev/null || warn "sysctl содержит лишние строки"
 
   mkdir -p /etc/amnezia/amneziawg
 
@@ -629,9 +702,6 @@ do_gen() {
   } > "$SERVER_CONF"
   chmod 600 "$SERVER_CONF"
 
-  log_info "do_gen: серверный конфиг записан в $SERVER_CONF"
-  grep -v "PrivateKey\|PresharedKey" "$SERVER_CONF" | while IFS= read -r l; do log_debug "srv_conf: $l"; done
-
   {
     echo "[Interface]"
     echo "PrivateKey = $cli_priv"
@@ -650,11 +720,10 @@ do_gen() {
   } > /root/client1_awg2.conf
   chmod 600 /root/client1_awg2.conf
 
-  log_info "do_gen: запускаем awg-quick up $SERVER_CONF"
   if awg-quick up "$SERVER_CONF"; then
     log_info "do_gen: awg-quick up успешно"
   else
-    log_err "do_gen: awg-quick up провалился (rc=$?)"
+    log_err "do_gen: awg-quick up провалился"
   fi
 
   if command -v ufw &>/dev/null; then
@@ -673,6 +742,7 @@ do_gen() {
   echo -e "${G}║            Сервер создан успешно             ║${N}"
   echo -e "${G}╚══════════════════════════════════════════════╝${N}"
   echo -e "${W}  Версия : ${N}$AWG_VERSION"
+  echo -e "${W}  Профиль: ${N}${MIMICRY_PROFILE:-none}"
   echo -e "${W}  Сервер : ${N}$SERVER_CONF"
   echo -e "${W}  Клиент : ${N}/root/client1_awg2.conf"
   echo -e "${W}  IP     : ${N}$srv_ip:$PORT"
@@ -693,42 +763,35 @@ ExecStop=
 ExecStop=/usr/bin/awg-quick down ${SERVER_CONF}
 EOF
   systemctl daemon-reload
-  systemctl enable awg-quick@awg0 2>/dev/null && ok "Автозапуск awg-quick@awg0 включён" || \
-    warn "Не удалось включить автозапуск — включи вручную: systemctl enable awg-quick@awg0"
+  systemctl enable awg-quick@awg0 2>/dev/null && ok "Автозапуск включён" || \
+    warn "Не удалось включить автозапуск"
 }
 
 # ══════════════════════════════════════════════════════════
-# 3. ДОБАВИТЬ КЛИЕНТА
+# 3. ДОБАВИТЬ КЛИЕНТА (с мимикрией)
 # ══════════════════════════════════════════════════════════
 do_add_client() {
   [[ ! -f "$SERVER_CONF" ]] && { err "конфиг сервера не найден. Сначала пункт 2"; return 1; }
-  command -v awg  &>/dev/null || { err "awg не найден"; return 1; }
-  command -v curl &>/dev/null || { err "curl не найден"; return 1; }
+  command -v awg &>/dev/null || { err "awg не найден"; return 1; }
 
   local server_net base_ip client_addr
   server_net=$(grep "^Address" "$SERVER_CONF" | awk -F'=' '{print $2}' | tr -d ' ' | head -1)
   base_ip=$(echo "$server_net" | cut -d. -f1-3)
   client_addr=$(find_free_ip "$base_ip") || { err "подсеть заполнена"; return 1; }
 
-  echo ""
   info "Следующий свободный IP: $client_addr"
 
   local client_name
   read -rp "$(echo -e "${C}  Имя клиента (phone, laptop...): ${N}")" client_name
   [[ -z "$client_name" ]] && { err "имя не может быть пустым"; return 1; }
-  [[ ! "$client_name" =~ ^[a-zA-Z0-9_-]+$ ]] && { err "только буквы, цифры, _ и -"; return 1; }
 
   local client_file="/root/${client_name}_awg2.conf"
-  [[ -f "$client_file" ]] && {
-    warn "Файл $client_file уже существует — будет перезаписан"
-  }
+  [[ -f "$client_file" ]] && warn "Файл $client_file уже существует — будет перезаписан"
 
   read -rp "$(echo -e "${C}  Использовать IP $client_addr? [Y/n]: ${N}")" CONFIRM_IP
   CONFIRM_IP=${CONFIRM_IP:-y}
   if [[ ! $CONFIRM_IP =~ ^[Yy]$ ]]; then
     read -rp "  IP вручную (пример: ${base_ip}.5/32): " client_addr
-    validate_ip_cidr "$client_addr" || return 1
-    [[ "$client_addr" =~ /32$ ]] || { err "для клиента нужна маска /32"; return 1; }
   fi
 
   choose_dns
@@ -741,39 +804,30 @@ do_add_client() {
   elif grep -q "^Jc = " "$SERVER_CONF" 2>/dev/null; then
     detected_ver="1.0"
   fi
-  info "Версия сервера: $detected_ver — клиент будет совместим"
+  info "Версия сервера: $detected_ver"
 
   local i1_line=""
   if [[ "$detected_ver" == "1.5" || "$detected_ver" == "2.0" ]]; then
-    hdr "Имитация протокола (I1):"
-    echo "  1) Google DNS — статический (совместим со всеми)"
-    echo "  2) Яндекс/Кинопоиск DNS — статический"
-    echo "  3) API по домену — QUIC реальный пакет"
-    echo "  4) Из серверного конфига"
-    echo "  5) Без имитации"
-    read -rp "$(echo -e "${C}  Выбор [1-5] (Enter = Google): ${N}")" I1_CHOICE
-    I1_CHOICE=${I1_CHOICE:-1}
-    case $I1_CHOICE in
-      1) i1_line="I1 = ${I1_GOOGLE}" ;;
-      2) i1_line="I1 = ${I1_YANDEX}" ;;
-      3)
-        local domain
-        read -rp "  Домен (Enter = google.com): " domain
-        domain=${domain:-google.com}
-        info "запрос к API для $domain..."
-        i1_line="I1 = $(fetch_i1_from_api "$domain")"
-        ;;
-      4)
+    hdr "Выбор I1 для клиента:"
+    echo "  1) Использовать I1 из серверного конфига"
+    echo "  2) Сгенерировать новый I1 (выбор профиля мимикрии)"
+    echo "  3) Без I1"
+    read -rp "$(echo -e "${C}  Выбор [1-3] (Enter = 1): ${N}")" I1_SELECT
+    I1_SELECT=${I1_SELECT:-1}
+    
+    case $I1_SELECT in
+      1)
         i1_line=$(grep "^I1 = " "$SERVER_CONF" | head -1 || true)
-        [[ -z "$i1_line" ]] && { warn "I1 не найден в конфиге сервера, используем Google"; i1_line="I1 = ${I1_GOOGLE}"; }
+        [[ -z "$i1_line" ]] && warn "I1 не найден в конфиге сервера"
         ;;
-      5) i1_line="" ;;
-      *) i1_line="I1 = ${I1_GOOGLE}" ;;
+      2)
+        choose_mimicry_profile
+        i1_line="I1 = $I1"
+        ;;
+      3)
+        i1_line=""
+        ;;
     esac
-    if [[ "$I1_CHOICE" != "5" && -z "$i1_line" ]]; then
-      warn "I1 оказался пустым → fallback Google DNS"
-      i1_line="I1 = ${I1_GOOGLE}"
-    fi
   fi
 
   local srv_pub srv_ip port mtu
@@ -782,7 +836,6 @@ do_add_client() {
   srv_ip=$(get_public_ip)
   [[ -z "$srv_ip" ]] && { err "не удалось получить внешний IP"; return 1; }
   port=$(grep "^ListenPort = " "$SERVER_CONF" | awk -F'= ' '{print $2}' | tr -d ' ')
-  [[ -z "$port" ]] && { err "не найден ListenPort в конфиге"; return 1; }
   mtu=$(grep "^PostUp" "$SERVER_CONF" | grep -oP 'mtu \K\d+' | head -1 || true)
   mtu=${mtu:-1380}
 
@@ -812,7 +865,7 @@ do_add_client() {
     || { err "не удалось добавить peer в runtime"; return 1; }
 
   local awg_params_from_srv
-  awg_params_from_srv=$(extract_awg_params "$SERVER_CONF")
+  awg_params_from_srv=$(grep -E "^(Jc|Jmin|Jmax|S[1-4]|H[1-4]) = " "$SERVER_CONF" | grep -v "^#" || true)
 
   {
     echo "[Interface]"
@@ -840,7 +893,6 @@ do_add_client() {
   echo -e "${G}╚══════════════════════════════════════════════╝${N}"
   echo -e "${W}  Имя    : ${N}$client_name"
   echo -e "${W}  IP     : ${N}$client_addr"
-  echo -e "${W}  DNS    : ${N}$CLIENT_DNS"
   echo -e "${W}  Конфиг : ${N}$client_file"
 }
 
@@ -937,7 +989,6 @@ do_show_qr() {
   echo ""
   cat "$chosen"
   echo ""
-  echo -e "${Y}  ──────────────────────────────────────────────${N}"
   ok "$chosen"
 }
 
@@ -962,10 +1013,7 @@ do_uninstall() {
   echo "  — пакеты amneziawg, amneziawg-tools"
   echo "  — /etc/amnezia/amneziawg/"
   echo "  — /root/*_awg2.conf"
-  echo "  — /etc/network/if-pre-up.d/iptables-nat"
-  echo "  — /etc/systemd/system/awg-quick@awg0.service.d/"
   echo "  — автозапуск awg-quick@awg0"
-  echo "  — UFW правила AmneziaWG"
   echo ""
   local CONFIRM_DEL
   read -rp "$(echo -e "${R}  Подтверди удаление [yes/N]: ${N}")" CONFIRM_DEL
@@ -975,7 +1023,7 @@ do_uninstall() {
   awg-quick down "$SERVER_CONF" 2>/dev/null || \
     ip link delete dev awg0 2>/dev/null || true
 
-  info "Отключаем и удаляем автозапуск..."
+  info "Отключаем автозапуск..."
   systemctl disable awg-quick@awg0 2>/dev/null || true
   rm -rf /etc/systemd/system/awg-quick@awg0.service.d 2>/dev/null || true
   systemctl daemon-reload 2>/dev/null || true
@@ -984,16 +1032,11 @@ do_uninstall() {
   apt-get remove -y -q amneziawg amneziawg-tools 2>/dev/null || true
   apt-get autoremove -y -q 2>/dev/null || true
 
-  info "Удаляем конфиги сервера..."
+  info "Удаляем конфиги..."
   rm -rf /etc/amnezia 2>/dev/null || true
-
-  info "Удаляем конфиги клиентов..."
   rm -f /root/*_awg2.conf 2>/dev/null || true
 
-  info "Удаляем NAT hook..."
-  rm -f /etc/network/if-pre-up.d/iptables-nat 2>/dev/null || true
-
-  info "Удаляем UFW правила AmneziaWG..."
+  info "Удаляем UFW правила..."
   if command -v ufw &>/dev/null; then
     local rule_nums
     rule_nums=$(ufw status numbered 2>/dev/null | grep -i "AmneziaWG" | grep -oE '\[[0-9]+\]' | tr -d '[]' | sort -rn)
@@ -1002,17 +1045,39 @@ do_uninstall() {
     done
   fi
 
-  info "Удаляем NAT iptables правила..."
-  local ext_if
-  ext_if=$(ip route | awk '/default/ {print $5; exit}' 2>/dev/null || true)
-  if [[ -n "$ext_if" ]]; then
-    iptables -t nat -D POSTROUTING -o "$ext_if" -j MASQUERADE 2>/dev/null || true
-    iptables -D FORWARD -i awg0 -j ACCEPT 2>/dev/null || true
-    iptables -D FORWARD -o awg0 -j ACCEPT 2>/dev/null || true
-  fi
-
   echo ""
   ok "Всё удалено"
+}
+
+# ══════════════════════════════════════════════════════════
+# 8. ПРОВЕРКА ДОМЕНОВ
+# ══════════════════════════════════════════════════════════
+do_check_domains() {
+  hdr "Проверка доступности доменов для мимикрии:"
+  echo ""
+  
+  local profiles=("QUIC Initial" "QUIC 0-RTT" "TLS" "DTLS" "SIP")
+  local domains=(
+    "${QUIC_INITIAL_DOMAINS[@]:0:5}"
+    "${QUIC_0RTT_DOMAINS[@]:0:3}"
+    "${TLS_CLIENT_HELLO_DOMAINS[@]:0:5}"
+    "${DTLS_DOMAINS[@]:0:3}"
+    "${SIP_DOMAINS[@]:0:3}"
+  )
+  
+  local count=0
+  for domain in "${domains[@]}"; do
+    if ping -c 1 -W 2 "$domain" &>/dev/null; then
+      echo -e "  ${G}✓${N} $domain — доступен"
+      ((count++))
+    else
+      echo -e "  ${R}✗${N} $domain — недоступен"
+    fi
+  done
+  
+  echo ""
+  ok "Проверено доменов: $count/${#domains[@]}"
+  info "При генерации будут использованы только доступные домены"
 }
 
 # ══════════════════════════════════════════════════════════
@@ -1022,17 +1087,18 @@ CHOICE=""
 CLIENT_DNS="1.1.1.1, 1.0.0.1"
 AWG_VERSION="2.0"
 I1=""
+MIMICRY_PROFILE=""
+MIMICRY_DOMAIN=""
 AWG_PARAMS_LINES=""
 
 touch "$LOG_FILE" 2>/dev/null && chmod 600 "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/awg-manager.log"
-log_info "=== AWG Manager запущен (PID=$$, USER=$(whoami)) ==="
+log_info "=== AWG Manager v4.0 запущен ==="
 
 trap 'rm -f /tmp/awg_tmp_* 2>/dev/null || true' EXIT
 
 while true; do
   show_header
   show_menu
-  log_info "Выбор пункта меню: ${CHOICE:-<пусто>}"
   case "${CHOICE:-}" in
     1) do_install ;;
     2) do_gen ;;
@@ -1041,6 +1107,7 @@ while true; do
     5) do_show_qr ;;
     6) do_restart ;;
     7) do_uninstall ;;
+    8) do_check_domains ;;
     0) log_info "Выход"; echo -e "\n${G}  Пока!${N}\n"; exit 0 ;;
     *) warn "Неверный выбор" ;;
   esac
