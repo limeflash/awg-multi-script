@@ -10,17 +10,12 @@
 [![Platform](https://img.shields.io/badge/Ubuntu-22.04%20%2F%2024.04-E95420?style=flat-square&logo=ubuntu&logoColor=white)](https://ubuntu.com/)
 [![Protocol](https://img.shields.io/badge/AWG-1.0%20→%202.0-00d4ff?style=flat-square)](#протоколы)
 [![Version](https://img.shields.io/badge/version-4.1-00ff88?style=flat-square)](#)
-
+</div>
 
 ```bash
 curl -s https://raw.githubusercontent.com/pumbaX/awg-multi-script/main/awg.sh -o /tmp/awg.sh
 sudo bash /tmp/awg.sh
 ```
-
-</div>
-
----
-
 ## Что это
 
 **AWG Multi Script** — интерактивный bash-менеджер для установки, настройки и управления AmneziaWG VPN-сервером. Один скрипт закрывает весь цикл: установка зависимостей, генерация сервера с мимикрией, управление клиентами, статистика трафика, бэкап, firewall.
