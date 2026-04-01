@@ -11,14 +11,11 @@
 [![Protocol](https://img.shields.io/badge/AWG-1.0%20→%202.0-00d4ff?style=flat-square)](#протоколы)
 [![Version](https://img.shields.io/badge/version-4.1-00ff88?style=flat-square)](#)
 
-<br>
 
 ```bash
 curl -s https://raw.githubusercontent.com/pumbaX/awg-multi-script/main/awg.sh -o /tmp/awg.sh
 sudo bash /tmp/awg.sh
 ```
-
-<br>
 
 </div>
 
