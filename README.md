@@ -131,7 +131,7 @@ sip.antisip.com, sip.voipbuster.com, sip.3cx.com
 
 ```
 ╔══════════════════════════════════════════════╗
-║        AmneziaWG Manager v4.1                ║
+║        AmneziaWG Manager v4.2                ║
 ║     С генератором мимикрии (QUIC/TLS/DTLS)   ║
 ╚══════════════════════════════════════════════╝
   IP сервера : 1.2.3.4
