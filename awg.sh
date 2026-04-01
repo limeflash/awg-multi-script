@@ -79,11 +79,12 @@ SIP_DOMAINS=(
   "sip.antisip.com" "sip.voipbuster.com" "sip.3cx.com"
 )
 
-# ── Выбор случайного домена из пула ────────────────────────
+# ── Выбор случайного доступного домена из пула ────────────────────────
 select_random_domain() {
   local profile="$1"
   local domains=()
-  
+  local available_domains=()
+
   case "$profile" in
     "quic_initial")   domains=("${QUIC_INITIAL_DOMAINS[@]}") ;;
     "quic_0rtt")      domains=("${QUIC_0RTT_DOMAINS[@]}") ;;
@@ -92,11 +93,19 @@ select_random_domain() {
     "sip")            domains=("${SIP_DOMAINS[@]}") ;;
     *)                domains=("${QUIC_INITIAL_DOMAINS[@]}") ;;
   esac
-  
-  if [[ ${#domains[@]} -eq 0 ]]; then
-    echo "yandex.net"
+
+  # Проверяем доступность (быстрая проверка, не вылетает)
+  for domain in "${domains[@]}"; do
+    if ping -c 1 -W 1 "$domain" &>/dev/null 2>&1; then
+      available_domains+=("$domain")
+    fi
+  done
+
+  # Если есть доступные — выбираем случайный, иначе первый из списка
+  if [[ ${#available_domains[@]} -gt 0 ]]; then
+    echo "${available_domains[$((RANDOM % ${#available_domains[@]}))]}"
   else
-    echo "${domains[$((RANDOM % ${#domains[@]}))]}"
+    echo "${domains[0]}"
   fi
 }
 
@@ -118,7 +127,7 @@ fetch_i1_from_api() {
     i1_val=$(echo "$api_resp" | python3 -c \
       "import sys,json; d=json.load(sys.stdin); print(d.get('i1',''))" \
       2>/dev/null) || i1_val=""
-    
+
     # fallback через jq
     if [[ -z "$i1_val" ]] && command -v jq &>/dev/null; then
       i1_val=$(echo "$api_resp" | jq -r '.i1 // empty' 2>/dev/null) || i1_val=""
@@ -138,7 +147,7 @@ fetch_i1_from_api() {
 
   # Нормализация I1
   i1_val=$(echo "$i1_val" | sed 's/^"//;s/"$//')
-  
+
   # Исправляем <b0x на <b 0x если нужно
   if [[ "$i1_val" =~ ^\<b0x ]]; then
     i1_val="${i1_val/<b0x/<b 0x}"
@@ -158,96 +167,99 @@ fetch_i1_from_api() {
 }
 
 # ══════════════════════════════════════════════════════════
-# ВЫБОР ПРОФИЛЯ МИМИКРИИ + ГЕНЕРАЦИЯ I1
+# ВЫБОР ПРОФИЛЯ МИМИКРИИ + ГЕНЕРАЦИЯ I1 (КРАСИВОЕ МЕНЮ)
 # ══════════════════════════════════════════════════════════
 choose_mimicry_profile() {
   I1=""
   MIMICRY_PROFILE=""
   MIMICRY_DOMAIN=""
-  
-  hdr "Профили мимикрии (AmneziaWG Architect):"
-  echo -e "  ${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
-  echo "  ${W}1)${N} QUIC Initial (HTTP/3) — наиболее надёжный в 2026"
-  echo "  ${W}2)${N} QUIC 0-RTT (Early Data) — быстрый старт"
-  echo "  ${W}3)${N} TLS 1.3 Client Hello — HTTPS (наибольшая совместимость)"
-  echo "  ${W}4)${N} DTLS 1.3 (WebRTC/STUN) — видеозвонки"
-  echo "  ${W}5)${N} SIP (VoIP) — телефонные звонки"
-  echo -e "  ${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
-  echo "  ${W}6)${N} Случайный домен из любого пула"
-  echo "  ${W}7)${N} Ручной ввод домена (API запрос)"
-  echo "  ${W}8)${N} Без имитации (только обфускация)"
-  
+
+  echo ""
+  echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+  echo -e "${W}        Профили мимикрии (AmneziaWG Architect)${N}"
+  echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+  echo -e "  ${G}1${N}  QUIC Initial (HTTP/3) — наиболее надёжный в 2026"
+  echo -e "  ${G}2${N}  QUIC 0-RTT (Early Data) — быстрый старт"
+  echo -e "  ${G}3${N}  TLS 1.3 Client Hello — HTTPS (наибольшая совместимость)"
+  echo -e "  ${G}4${N}  DTLS 1.3 (WebRTC/STUN) — видеозвонки"
+  echo -e "  ${G}5${N}  SIP (VoIP) — телефонные звонки"
+  echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+  echo -e "  ${Y}6${N}  Случайный домен из любого пула"
+  echo -e "  ${Y}7${N}  Ручной ввод домена (API запрос)"
+  echo -e "  ${Y}8${N}  Без имитации (только обфускация)"
+  echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+
   read -rp "$(echo -e "${C}  Выбор [1-8] (Enter = 1): ${N}")" PROFILE_CHOICE
   PROFILE_CHOICE=${PROFILE_CHOICE:-1}
-  
+
   local domain=""
   case $PROFILE_CHOICE in
     1)
       MIMICRY_PROFILE="quic_initial"
       domain=$(select_random_domain "quic_initial")
-      info "Выбран QUIC Initial, домен: $domain"
+      echo -e "${C}  → QUIC Initial, домен: ${W}$domain${N}"
       ;;
     2)
       MIMICRY_PROFILE="quic_0rtt"
       domain=$(select_random_domain "quic_0rtt")
-      info "Выбран QUIC 0-RTT, домен: $domain"
+      echo -e "${C}  → QUIC 0-RTT, домен: ${W}$domain${N}"
       ;;
     3)
       MIMICRY_PROFILE="tls"
       domain=$(select_random_domain "tls")
-      info "Выбран TLS 1.3, домен: $domain"
+      echo -e "${C}  → TLS 1.3, домен: ${W}$domain${N}"
       ;;
     4)
       MIMICRY_PROFILE="dtls"
       domain=$(select_random_domain "dtls")
-      info "Выбран DTLS, домен: $domain"
+      echo -e "${C}  → DTLS, домен: ${W}$domain${N}"
       ;;
     5)
       MIMICRY_PROFILE="sip"
       domain=$(select_random_domain "sip")
-      info "Выбран SIP, домен: $domain"
+      echo -e "${C}  → SIP, домен: ${W}$domain${N}"
       ;;
     6)
       local profiles=("quic_initial" "quic_0rtt" "tls" "dtls" "sip")
       MIMICRY_PROFILE="${profiles[$((RANDOM % ${#profiles[@]}))]}"
       domain=$(select_random_domain "$MIMICRY_PROFILE")
-      info "Случайный профиль: $MIMICRY_PROFILE, домен: $domain"
+      echo -e "${C}  → Случайный профиль: ${W}$MIMICRY_PROFILE${N}, домен: ${W}$domain${N}"
       ;;
     7)
-      read -rp "  Введите домен (например: cloudflare.com): " domain
+      read -rp "$(echo -e "${C}  Введите домен (например: cloudflare.com): ${N}")" domain
       if [[ -z "$domain" ]]; then
         warn "Домен не введён"
         return 1
       fi
-      info "Ручной ввод: $domain"
+      echo -e "${C}  → Ручной ввод: ${W}$domain${N}"
       ;;
     8)
       I1=""
       MIMICRY_PROFILE="none"
-      ok "Без имитации"
+      echo -e "${G}  ✓ Без имитации${N}"
       return 0
       ;;
     *)
       MIMICRY_PROFILE="quic_initial"
       domain=$(select_random_domain "quic_initial")
-      info "По умолчанию: QUIC Initial, домен: $domain"
+      echo -e "${C}  → По умолчанию: QUIC Initial, домен: ${W}$domain${N}"
       ;;
   esac
-  
+
   # Если выбран не "без имитации" и есть домен — запрашиваем I1
   if [[ "$PROFILE_CHOICE" != "8" ]] && [[ -n "$domain" ]]; then
-    info "Запрос I1 для $domain..."
+    echo -e "${C}  → Запрос I1 для $domain...${N}"
     I1=$(fetch_i1_from_api "$domain")
     if [[ -z "$I1" ]]; then
-      warn "Не удалось получить I1 для $domain"
-      echo -e "${Y}  Совет: проверь интернет или выбери другой домен${N}"
+      echo -e "${Y}  ⚠ Не удалось получить I1 для $domain${N}"
+      echo -e "${Y}  → API недоступен или домен не поддерживает QUIC${N}"
       read -rp "$(echo -e "${C}  Продолжить без I1? [y/N]: ${N}")" CONTINUE
       if [[ ! "$CONTINUE" =~ ^[Yy]$ ]]; then
         return 1
       fi
       I1=""
     else
-      ok "I1 получен для $domain (длина: ${#I1})"
+      echo -e "${G}  ✓ I1 получен (длина: ${#I1} байт)${N}"
     fi
   fi
 }
@@ -412,34 +424,34 @@ gen_awg_params() {
     local H2_START H2_END H2
     local H3_START H3_END H3
     local H4_START H4_END H4
-    
+
     S3=$(rand_range 5 34)
     S4=$(rand_range 1 16)
-    
+
     # H1: квадрант 0 [0, Q-1]
     H1_START=$(rand_range 0 $((Q - 1)))
     H1_END=$(rand_range $((H1_START + 30000)) $((H1_START + 130000)))
     [[ $H1_END -gt $((Q - 1)) ]] && H1_END=$((Q - 1))
     H1="${H1_START}-${H1_END}"
-    
+
     # H2: квадрант 1 [Q, 2Q-1]
     H2_START=$(rand_range $Q $((Q * 2 - 1)))
     H2_END=$(rand_range $((H2_START + 30000)) $((H2_START + 130000)))
     [[ $H2_END -gt $((Q * 2 - 1)) ]] && H2_END=$((Q * 2 - 1))
     H2="${H2_START}-${H2_END}"
-    
+
     # H3: квадрант 2 [2Q, 3Q-1]
     H3_START=$(rand_range $((Q * 2)) $((Q * 3 - 1)))
     H3_END=$(rand_range $((H3_START + 30000)) $((H3_START + 130000)))
     [[ $H3_END -gt $((Q * 3 - 1)) ]] && H3_END=$((Q * 3 - 1))
     H3="${H3_START}-${H3_END}"
-    
+
     # H4: квадрант 3 [3Q, 4Q-1]
     H4_START=$(rand_range $((Q * 3)) $((Q * 4 - 1)))
     H4_END=$(rand_range $((H4_START + 30000)) $((H4_START + 130000)))
     [[ $H4_END -gt $((Q * 4 - 1)) ]] && H4_END=$((Q * 4 - 1))
     H4="${H4_START}-${H4_END}"
-    
+
     AWG_PARAMS_LINES="Jc = $Jc
 Jmin = $Jmin
 Jmax = $Jmax
@@ -451,7 +463,7 @@ H1 = $H1
 H2 = $H2
 H3 = $H3
 H4 = $H4"
-    
+
   elif [[ "$ver" == "1.5" ]]; then
     # AWG 1.5: S1, S2, одиночные H1-H4
     local H1 H2 H3 H4
@@ -468,7 +480,7 @@ H1 = $H1
 H2 = $H2
 H3 = $H3
 H4 = $H4"
-    
+
   else # AWG 1.0
     local H1 H2 H3 H4
     H1=$(rand_range 0 $((Q - 1)))
@@ -591,7 +603,7 @@ do_gen() {
 
   choose_awg_version
   choose_dns
-  
+
   # Выбор профиля мимикрии
   choose_mimicry_profile || return 1
 
@@ -814,7 +826,7 @@ do_add_client() {
     echo "  3) Без I1"
     read -rp "$(echo -e "${C}  Выбор [1-3] (Enter = 1): ${N}")" I1_SELECT
     I1_SELECT=${I1_SELECT:-1}
-    
+
     case $I1_SELECT in
       1)
         i1_line=$(grep "^I1 = " "$SERVER_CONF" | head -1 || true)
@@ -1050,34 +1062,75 @@ do_uninstall() {
 }
 
 # ══════════════════════════════════════════════════════════
-# 8. ПРОВЕРКА ДОМЕНОВ
+# 8. ПРОВЕРКА ДОМЕНОВ (НЕ ВЫКИДЫВАЕТ ИЗ СКРИПТА)
 # ══════════════════════════════════════════════════════════
 do_check_domains() {
-  hdr "Проверка доступности доменов для мимикрии:"
   echo ""
-  
-  local profiles=("QUIC Initial" "QUIC 0-RTT" "TLS" "DTLS" "SIP")
-  local domains=(
-    "${QUIC_INITIAL_DOMAINS[@]:0:5}"
-    "${QUIC_0RTT_DOMAINS[@]:0:3}"
-    "${TLS_CLIENT_HELLO_DOMAINS[@]:0:5}"
-    "${DTLS_DOMAINS[@]:0:3}"
-    "${SIP_DOMAINS[@]:0:3}"
-  )
-  
-  local count=0
-  for domain in "${domains[@]}"; do
-    if ping -c 1 -W 2 "$domain" &>/dev/null; then
-      echo -e "  ${G}✓${N} $domain — доступен"
-      ((count++))
+  echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+  echo -e "${W}        Проверка доступности доменов для мимикрии${N}"
+  echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+  echo ""
+
+  local available=0
+  local total=0
+
+  # QUIC Initial (топ-10)
+  echo -e "${C}  QUIC Initial (HTTP/3):${N}"
+  for domain in yandex.net yastatic.net vk.com mail.ru ozon.ru wildberries.ru sber.ru tbank.ru gcore.com fastly.net; do
+    total=$((total + 1))
+    if ping -c 1 -W 2 "$domain" &>/dev/null 2>&1; then
+      echo -e "    ${G}✓${N} $domain"
+      available=$((available + 1))
     else
-      echo -e "  ${R}✗${N} $domain — недоступен"
+      echo -e "    ${R}✗${N} $domain"
     fi
   done
-  
+
   echo ""
-  ok "Проверено доменов: $count/${#domains[@]}"
-  info "При генерации будут использованы только доступные домены"
+  echo -e "${C}  TLS 1.3 Client Hello (HTTPS):${N}"
+  for domain in yandex.ru vk.com mail.ru github.com gitlab.com microsoft.com apple.com stackoverflow.com; do
+    total=$((total + 1))
+    if ping -c 1 -W 2 "$domain" &>/dev/null 2>&1; then
+      echo -e "    ${G}✓${N} $domain"
+      available=$((available + 1))
+    else
+      echo -e "    ${R}✗${N} $domain"
+    fi
+  done
+
+  echo ""
+  echo -e "${C}  DTLS (WebRTC/STUN):${N}"
+  for domain in stun.yandex.net stun.vk.com stun.mail.ru meet.jit.si stun.stunprotocol.org; do
+    total=$((total + 1))
+    if ping -c 1 -W 2 "$domain" &>/dev/null 2>&1; then
+      echo -e "    ${G}✓${N} $domain"
+      available=$((available + 1))
+    else
+      echo -e "    ${R}✗${N} $domain"
+    fi
+  done
+
+  echo ""
+  echo -e "${C}  SIP (VoIP):${N}"
+  for domain in sip.beeline.ru sip.mts.ru sip.yandex.ru sip.iptel.org; do
+    total=$((total + 1))
+    if ping -c 1 -W 2 "$domain" &>/dev/null 2>&1; then
+      echo -e "    ${G}✓${N} $domain"
+      available=$((available + 1))
+    else
+      echo -e "    ${R}✗${N} $domain"
+    fi
+  done
+
+  echo ""
+  echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+  echo -e "${G}  ✓ Доступно: $available из $total доменов${N}"
+  echo -e "${Y}  → При генерации будут использованы только доступные домены${N}"
+  echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+  echo ""
+
+  # Не выходим из скрипта, просто показываем результаты
+  return 0
 }
 
 # ══════════════════════════════════════════════════════════
