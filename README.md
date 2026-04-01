@@ -1,7 +1,7 @@
-<div align="center">
-**AWG Multi Script**
+
 
 <div align="center">
+## AWG Multi Script
 
 **Универсальный менеджер AmneziaWG** для быстрого развёртывания VPN на VPS одной командой.
 
