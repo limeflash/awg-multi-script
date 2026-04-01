@@ -512,7 +512,7 @@ do_install() {
     software-properties-common \
     python3-launchpadlib \
     python3 \
-    net-tools curl ufw iptables qrencode bc timeout
+    net-tools curl ufw iptables qrencode bc
 
   hdr "=== Kernel headers ==="
   apt-get install -y -q "linux-headers-$(uname -r)" 2>/dev/null || \
@@ -585,7 +585,6 @@ EOF
   ok "Установка завершена"
   info "Следующий шаг: пункт меню 2 — Создать сервер"
 }
-
 # ══════════════════════════════════════════════════════════
 # 2. СОЗДАТЬ СЕРВЕР (с мимикрией + очистка старых клиентов)
 # ══════════════════════════════════════════════════════════
