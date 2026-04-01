@@ -5,7 +5,8 @@
 </div>
 
 <div align="center">
-**Универсальный менеджер AmneziaWG** для быстрого развёртывания VPN на VPS одной командой.
+  
+# **Универсальный менеджер AmneziaWG** для быстрого развёртывания VPN на VPS одной командой.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/Platform-Ubuntu%2022.04%20%2F%2024.04-blue.svg)](https://ubuntu.com/)
