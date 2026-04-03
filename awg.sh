@@ -534,7 +534,7 @@ do_gen() {
   echo "  1) 10.100.0.0/24"
   echo "  2) 10.101.0.0/24"
   echo "  3) 10.102.0.0/24"
-  echo "  4) 10.103.0.0/24"
+  echo "  4) 10.44.5.0/24"
   echo "  5) Вручную"
   local CLIENT_ADDR="" SERVER_ADDR="" CLIENT_NET=""
   local ADDR_CHOICE
@@ -544,7 +544,7 @@ do_gen() {
     1) CLIENT_ADDR="10.100.0.2/32"; SERVER_ADDR="10.100.0.1/24"; CLIENT_NET="10.100.0.0/24" ;;
     2) CLIENT_ADDR="10.101.0.2/32"; SERVER_ADDR="10.101.0.1/24"; CLIENT_NET="10.101.0.0/24" ;;
     3) CLIENT_ADDR="10.102.0.2/32"; SERVER_ADDR="10.102.0.1/24"; CLIENT_NET="10.102.0.0/24" ;;
-    4) CLIENT_ADDR="10.103.0.2/32"; SERVER_ADDR="10.103.0.1/24"; CLIENT_NET="10.103.0.0/24" ;;
+    4) CLIENT_ADDR="10.44.5.2/32"; SERVER_ADDR="10.44.5.1/24"; CLIENT_NET="10.44.5.0/24" ;;
     5)
       read -rp "  IP клиента (X.X.X.X/32): " CLIENT_ADDR
       read -rp "  IP сервера (X.X.X.X/24): " SERVER_ADDR
