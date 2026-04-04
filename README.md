@@ -25,7 +25,7 @@ sudo bash /tmp/awg2.sh
 
 ---
 
-На кофе:
+**На кофе:**
 Адрес USDT TRC20:
 TN2rQAsGNHQr8wnneKRD14UMX629D2Ca5q
 
