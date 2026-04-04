@@ -25,6 +25,19 @@ sudo bash /tmp/awg2.sh
 
 ---
 
+На кофе:
+Адрес USDT TRC20:
+TN2rQAsGNHQr8wnneKRD14UMX629D2Ca5q
+
+Адрес USDT ERC20:
+0x721845234eeC44e0a9BaE78402965828C1bc6c57
+
+Адрес USDT TON:
+UQCwj-RY2a4BH7sIDDeLb77XRaPDq0mb1FVwyC4UaOGbLMYy
+
+Адрес TON:
+UQCdQtJO4CF0Lyeb93X2zdeWeAcDJ-ieBC3AaL7LIqWfMBg3
+
 ## Что это
 
 **awg2-installer** — интерактивный bash-менеджер для развёртывания и управления AmneziaWG 2.0 VPN-сервером. Один скрипт закрывает весь цикл: установка, генерация сервера с мимикрией, управление клиентами, статистика трафика, бекап и восстановление, firewall.
