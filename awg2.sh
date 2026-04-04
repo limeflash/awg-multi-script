@@ -1709,7 +1709,7 @@ while true; do
    11) do_restore ;;
     0) log_info "Выход"
        echo -e "\n${G}  Пока!${N}"
-       echo -e "${C}  Поддержка и обсуждение: ${W}https://t.me/+c9ag3eX-zaNlMjEy${N}\n"
+       echo -e "${C}  For Keenetic users - ${W}https://t.me/+c9ag3eX-zaNlMjEy${N}\n"
        exit 0 ;;
     *)
       warn "Неверный выбор"
