@@ -19,10 +19,13 @@
 ## Быстрый старт
 
 ```bash
-curl -s https://raw.githubusercontent.com/pumbaX/awg-multi-script/main/awg2.sh -o /tmp/awg2.sh
-sudo bash /tmp/awg2.sh
+sudo curl -fsSL https://raw.githubusercontent.com/pumbaX/awg-multi-script/main/awg2.sh -o /usr/local/bin/awg2
+sudo chmod +x /usr/local/bin/awg2
 ```
-
+```bash
+# Запуск в любой момент
+sudo awg2
+```
 ---
 
 **На кофе:**
