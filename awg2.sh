@@ -4,7 +4,7 @@ set -euo pipefail
 # ─────────────────────────────────────────────────────────────
 # - AmneziaWG Manager v5.0 — только AWG 2.0
 # - Убраны WG / AWG 1.0 / AWG 1.5
-# - Выбор типа I1 при ручном вводе домена (10 протоколов)
+# - Выбор типа I1 при ручном вводе домена (7 протоколов)
 # - Бекап и восстановление конфигов AWG 2.0 (~/awg_backup/)
 # - Все остальные фиксы v4.3 сохранены
 # ─────────────────────────────────────────────────────────────
@@ -38,22 +38,6 @@ log_err()   { _log "ERROR" "$@"; }
 # ДОМЕННЫЕ ПУЛЫ ДЛЯ МИМИКРИИ
 # ══════════════════════════════════════════════════════════
 
-QUIC_INITIAL_DOMAINS=(
-  "yandex.net" "yastatic.net" "vk.com" "mycdn.me" "mail.ru"
-  "ozon.ru" "wildberries.ru" "wbstatic.net" "sber.ru" "tbank.ru"
-  "gosuslugi.ru" "gcore.com" "fastly.net" "cloudfront.net"
-  "microsoft.com" "icloud.com" "github.com" "cdn.jsdelivr.net"
-  "wikipedia.org" "dropbox.com" "steamstatic.com" "spotify.com"
-  "akamaiedge.net" "msedge.net" "azureedge.net"
-)
-
-QUIC_0RTT_DOMAINS=(
-  "yandex.net" "vk.com" "mail.ru" "ozon.ru" "wildberries.ru"
-  "sber.ru" "tbank.ru" "gosuslugi.ru" "gcore.com" "fastly.net"
-  "cloudfront.net" "microsoft.com" "github.com" "cdn.jsdelivr.net"
-  "wikipedia.org" "spotify.com"
-)
-
 TLS_CLIENT_HELLO_DOMAINS=(
   "yandex.ru" "vk.com" "mail.ru" "ozon.ru" "wildberries.ru"
   "sberbank.ru" "tbank.ru" "gosuslugi.ru" "kaspersky.ru"
@@ -76,12 +60,10 @@ select_random_domain() {
   local profile="$1"
   local domains=()
   case "$profile" in
-    "quic_initial") domains=("${QUIC_INITIAL_DOMAINS[@]}") ;;
-    "quic_0rtt")    domains=("${QUIC_0RTT_DOMAINS[@]}") ;;
-    "tls")          domains=("${TLS_CLIENT_HELLO_DOMAINS[@]}") ;;
-    "dtls")         domains=("${DTLS_DOMAINS[@]}") ;;
-    "sip")          domains=("${SIP_DOMAINS[@]}") ;;
-    *)              domains=("${QUIC_INITIAL_DOMAINS[@]}") ;;
+    "tls")  domains=("${TLS_CLIENT_HELLO_DOMAINS[@]}") ;;
+    "dtls") domains=("${DTLS_DOMAINS[@]}") ;;
+    "sip")  domains=("${SIP_DOMAINS[@]}") ;;
+    *)      domains=("${TLS_CLIENT_HELLO_DOMAINS[@]}") ;;
   esac
   echo "${domains[$((RANDOM % ${#domains[@]}))]}"
 }
@@ -133,44 +115,6 @@ validate_i1() {
 
 # Каждая функция возвращает hex-пакет в формате <b 0x...>
 # который корректно воспринимается AWG 2.0 (без <c><t><r> тегов)
-
-_gen_i1_quic_initial() {
-  local domain="$1"
-  python3 - "$domain" <<'PYEOF'
-import sys, secrets
-domain = sys.argv[1].encode()
-# QUIC Initial Long Header (RFC 9000)
-# Type=0xC0, Version=0x00000001, DCID len=8, SCID len=8
-dcid = secrets.token_bytes(8)
-scid = secrets.token_bytes(8)
-# SNI в виде сырых байт домена (имитация CRYPTO frame payload)
-sni = domain
-pkt = bytes([0xC0, 0x00, 0x00, 0x00, 0x01])  # Long Header + Version
-pkt += bytes([len(dcid)]) + dcid
-pkt += bytes([len(scid)]) + scid
-pkt += b'\x00'  # Token Length = 0
-pkt += len(sni).to_bytes(2, 'big') + sni
-print('<b 0x' + pkt.hex() + '>')
-PYEOF
-}
-
-_gen_i1_quic_0rtt() {
-  local domain="$1"
-  python3 - "$domain" <<'PYEOF'
-import sys, secrets
-domain = sys.argv[1].encode()
-# QUIC 0-RTT Long Header (type 0xD0)
-dcid = secrets.token_bytes(8)
-scid = secrets.token_bytes(8)
-sni = domain
-pkt = bytes([0xD0, 0x00, 0x00, 0x00, 0x01])
-pkt += bytes([len(dcid)]) + dcid
-pkt += bytes([len(scid)]) + scid
-pkt += b'\x00'
-pkt += len(sni).to_bytes(2, 'big') + sni
-print('<b 0x' + pkt.hex() + '>')
-PYEOF
-}
 
 _gen_i1_tls13() {
   local domain="$1"
@@ -320,26 +264,6 @@ print('<b 0x' + rec.hex() + '>')
 PYEOF
 }
 
-_gen_i1_quic_burst() {
-  local domain="$1"
-  python3 - "$domain" <<'PYEOF'
-import sys, secrets
-domain = sys.argv[1].encode()
-# 3 × QUIC Initial packets (burst)
-def make_quic_initial(domain):
-    dcid = secrets.token_bytes(8)
-    scid = secrets.token_bytes(8)
-    pkt = bytes([0xC0, 0x00, 0x00, 0x00, 0x01])
-    pkt += bytes([len(dcid)]) + dcid
-    pkt += bytes([len(scid)]) + scid
-    pkt += b'\x00'
-    pkt += len(domain).to_bytes(2, 'big') + domain
-    return pkt
-burst = make_quic_initial(domain) + make_quic_initial(domain) + make_quic_initial(domain)
-print('<b 0x' + burst.hex() + '>')
-PYEOF
-}
-
 _gen_i1_dns_query() {
   local domain="$1"
   python3 - "$domain" <<'PYEOF'
@@ -376,76 +300,60 @@ choose_i1_type_for_domain() {
   echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
   echo -e "${W}        Выбор типа I1 для домена: ${C}$domain${N}"
   echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
-  echo -e "  ${G} 1${N}  QUIC Initial (RFC 9000)          — HTTP/3, наиболее надёжный в 2026"
-  echo -e "  ${G} 2${N}  QUIC 0-RTT (Early Data)          — быстрый старт соединения"
-  echo -e "  ${G} 3${N}  TLS 1.3 Client Hello             — HTTPS, максимальная совместимость"
-  echo -e "  ${G} 4${N}  Noise_IK (Standard)              — нативный AWG handshake"
-  echo -e "  ${G} 5${N}  DTLS 1.3 Handshake               — WebRTC / STUN / видеозвонки"
-  echo -e "  ${G} 6${N}  HTTP/3 Host Mimicry              — QPACK заголовки с доменом"
-  echo -e "  ${G} 7${N}  SIP (VoIP Signaling)             — SIP REGISTER пакет"
-  echo -e "  ${G} 8${N}  TLS → QUIC (Alt-Svc)            — TLS ClientHello с ALPN h3"
-  echo -e "  ${G} 9${N}  QUIC Burst (Multi-packet)        — тройной QUIC Initial"
-  echo -e "  ${G}10${N}  DNS Query (UDP 53)               — стандартный A-запрос"
-  echo -e "  ${Y}11${N}  Запросить через API              — автоматически с junk.web2core"
+  echo -e "  ${G}1${N}  TLS 1.3 Client Hello   — HTTPS, максимальная совместимость (рекомендуется)"
+  echo -e "  ${G}2${N}  Noise_IK (Standard)    — нативный AWG handshake"
+  echo -e "  ${G}3${N}  DTLS 1.3 Handshake     — WebRTC / STUN / видеозвонки"
+  echo -e "  ${G}4${N}  HTTP/3 Host Mimicry    — QPACK заголовки с доменом"
+  echo -e "  ${G}5${N}  SIP (VoIP Signaling)   — SIP REGISTER пакет"
+  echo -e "  ${G}6${N}  TLS → QUIC (Alt-Svc)  — TLS ClientHello с ALPN h3"
+  echo -e "  ${G}7${N}  DNS Query (UDP 53)     — стандартный A-запрос"
+  echo -e "  ${Y}8${N}  Запросить через API    — автоматически с junk.web2core"
   echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
 
   local I1_TYPE_CHOICE
-  read -rp "$(echo -e "${C}  Тип I1 [1-11] (Enter = 1): ${N}")" I1_TYPE_CHOICE
+  read -rp "$(echo -e "${C}  Тип I1 [1-8] (Enter = 1): ${N}")" I1_TYPE_CHOICE
   I1_TYPE_CHOICE=${I1_TYPE_CHOICE:-1}
 
   case $I1_TYPE_CHOICE in
     1)
-      info "Генерируем QUIC Initial для $domain..."
-      generated_i1=$(_gen_i1_quic_initial "$domain")
-      ;;
-    2)
-      info "Генерируем QUIC 0-RTT для $domain..."
-      generated_i1=$(_gen_i1_quic_0rtt "$domain")
-      ;;
-    3)
       info "Генерируем TLS 1.3 ClientHello для $domain..."
       generated_i1=$(_gen_i1_tls13 "$domain")
       ;;
-    4)
+    2)
       info "Генерируем Noise_IK..."
       generated_i1=$(_gen_i1_noise_ik)
       ;;
-    5)
+    3)
       info "Генерируем DTLS 1.3 для $domain..."
       generated_i1=$(_gen_i1_dtls13 "$domain")
       ;;
-    6)
+    4)
       info "Генерируем HTTP/3 HEADERS для $domain..."
       generated_i1=$(_gen_i1_http3 "$domain")
       ;;
-    7)
+    5)
       info "Генерируем SIP REGISTER для $domain..."
       generated_i1=$(_gen_i1_sip "$domain")
       ;;
-    8)
+    6)
       info "Генерируем TLS→QUIC Alt-Svc для $domain..."
       generated_i1=$(_gen_i1_tls_quic_altsvc "$domain")
       ;;
-    9)
-      info "Генерируем QUIC Burst для $domain..."
-      generated_i1=$(_gen_i1_quic_burst "$domain")
-      ;;
-   10)
+    7)
       info "Генерируем DNS Query для $domain..."
       generated_i1=$(_gen_i1_dns_query "$domain")
       ;;
-   11)
+    8)
       info "Запрашиваем I1 через API для $domain..."
-      generated_i1=$(fetch_i1_from_api "$domain")
+      generated_i1=$(fetch_i1_from_api "$domain") || generated_i1=""
       if [[ -z "$generated_i1" ]]; then
-        warn "API недоступен или домен не поддерживает QUIC"
-        I1=""
-        return 0
+        warn "API недоступен — генерируем TLS 1.3 локально"
+        generated_i1=$(_gen_i1_tls13 "$domain")
       fi
       ;;
     *)
-      info "Генерируем QUIC Initial (по умолчанию) для $domain..."
-      generated_i1=$(_gen_i1_quic_initial "$domain")
+      info "Генерируем TLS 1.3 ClientHello (по умолчанию) для $domain..."
+      generated_i1=$(_gen_i1_tls13 "$domain")
       ;;
   esac
 
@@ -475,54 +383,42 @@ choose_mimicry_profile() {
   echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
   echo -e "${W}        Профили мимикрии (AmneziaWG Architect)${N}"
   echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
-  echo -e "  ${G}1${N}  QUIC Initial (HTTP/3) — наиболее надёжный в 2026"
-  echo -e "  ${G}2${N}  QUIC 0-RTT (Early Data) — быстрый старт"
-  echo -e "  ${G}3${N}  TLS 1.3 Client Hello — HTTPS (наибольшая совместимость)"
-  echo -e "  ${G}4${N}  DTLS 1.3 (WebRTC/STUN) — видеозвонки"
-  echo -e "  ${G}5${N}  SIP (VoIP) — телефонные звонки"
+  echo -e "  ${G}1${N}  TLS 1.3 Client Hello — HTTPS (рекомендуется)"
+  echo -e "  ${G}2${N}  DTLS 1.3 (WebRTC/STUN) — видеозвонки"
+  echo -e "  ${G}3${N}  SIP (VoIP) — телефонные звонки"
   echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
-  echo -e "  ${Y}6${N}  Случайный домен из любого пула"
-  echo -e "  ${Y}7${N}  Ручной ввод домена + выбор типа I1"
-  echo -e "  ${Y}8${N}  Без имитации (только обфускация)"
+  echo -e "  ${Y}4${N}  Случайный домен из любого пула"
+  echo -e "  ${Y}5${N}  Ручной ввод домена + выбор типа I1"
+  echo -e "  ${Y}6${N}  Без имитации (только обфускация)"
   echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
 
-  read -rp "$(echo -e "${C}  Выбор [1-8] (Enter = 1): ${N}")" PROFILE_CHOICE
+  read -rp "$(echo -e "${C}  Выбор [1-6] (Enter = 1): ${N}")" PROFILE_CHOICE
   PROFILE_CHOICE=${PROFILE_CHOICE:-1}
 
   local domain=""
   case $PROFILE_CHOICE in
     1)
-      MIMICRY_PROFILE="quic_initial"
-      domain=$(select_random_domain "quic_initial")
-      echo -e "${C}  → QUIC Initial, домен: ${W}$domain${N}"
-      ;;
-    2)
-      MIMICRY_PROFILE="quic_0rtt"
-      domain=$(select_random_domain "quic_0rtt")
-      echo -e "${C}  → QUIC 0-RTT, домен: ${W}$domain${N}"
-      ;;
-    3)
       MIMICRY_PROFILE="tls"
       domain=$(select_random_domain "tls")
       echo -e "${C}  → TLS 1.3, домен: ${W}$domain${N}"
       ;;
-    4)
+    2)
       MIMICRY_PROFILE="dtls"
       domain=$(select_random_domain "dtls")
       echo -e "${C}  → DTLS, домен: ${W}$domain${N}"
       ;;
-    5)
+    3)
       MIMICRY_PROFILE="sip"
       domain=$(select_random_domain "sip")
       echo -e "${C}  → SIP, домен: ${W}$domain${N}"
       ;;
-    6)
-      local profiles=("quic_initial" "quic_0rtt" "tls" "dtls" "sip")
+    4)
+      local profiles=("tls" "dtls" "sip")
       MIMICRY_PROFILE="${profiles[$((RANDOM % ${#profiles[@]}))]}"
       domain=$(select_random_domain "$MIMICRY_PROFILE")
       echo -e "${C}  → Случайный профиль: ${W}$MIMICRY_PROFILE${N}, домен: ${W}$domain${N}"
       ;;
-    7)
+    5)
       read -rp "$(echo -e "${C}  Введите домен (например: cloudflare.com): ${N}")" domain
       if [[ -z "$domain" ]]; then
         warn "Домен не введён"
@@ -531,44 +427,54 @@ choose_mimicry_profile() {
       MIMICRY_PROFILE="manual"
       MIMICRY_DOMAIN="$domain"
       echo -e "${C}  → Ручной ввод: ${W}$domain${N}"
-      # Вызываем выбор типа I1 — возвращает значение в глобальной $I1
       choose_i1_type_for_domain "$domain"
       return 0
       ;;
-    8)
+    6)
       I1=""
       MIMICRY_PROFILE="none"
       echo -e "${G}  ✓ Без имитации${N}"
       return 0
       ;;
     *)
-      MIMICRY_PROFILE="quic_initial"
-      domain=$(select_random_domain "quic_initial")
-      echo -e "${C}  → По умолчанию: QUIC Initial, домен: ${W}$domain${N}"
+      MIMICRY_PROFILE="tls"
+      domain=$(select_random_domain "tls")
+      echo -e "${C}  → По умолчанию: TLS 1.3, домен: ${W}$domain${N}"
       ;;
   esac
 
-  # Для профилей 1-6 и fallback: API → локальная генерация как fallback
-  if [[ "$PROFILE_CHOICE" != "8" ]] && [[ -n "$domain" ]]; then
+  # Для профилей 1-6 и fallback:
+  # API → если получен QUIC Initial (0xC0/0xC1/0xD0) — заменяем на TLS 1.3 (совместимость)
+  # API недоступен → локальная генерация по профилю
+  if [[ "$PROFILE_CHOICE" != "6" ]] && [[ -n "$domain" ]]; then
     echo -e "${C}  → Запрос I1 для $domain...${N}"
     I1=$(fetch_i1_from_api "$domain") || I1=""
-    if [[ -z "$I1" ]]; then
+    if [[ -n "$I1" ]]; then
+      # Проверяем: если API вернул QUIC Initial/0-RTT байты — заменяем на TLS 1.3
+      # QUIC Long Header: первый байт 0xC0-0xFF (бит 7=1, бит 6=1)
+      local i1_hex first_byte
+      i1_hex=$(echo "$I1" | grep -oP '(?<=<b 0x)[0-9a-fA-F]+' | head -1)
+      first_byte="${i1_hex:0:2}"
+      if [[ "$first_byte" =~ ^[cCdDeEfF] ]]; then
+        echo -e "${Y}  ⚠ API вернул QUIC Initial — заменяем на TLS 1.3 (совместимость клиентов)${N}"
+        I1=$(_gen_i1_tls13 "$domain")
+        echo -e "${G}  ✓ I1 TLS 1.3 сгенерирован (длина: ${#I1} байт)${N}"
+      else
+        echo -e "${G}  ✓ I1 получен через API (длина: ${#I1} байт)${N}"
+      fi
+    else
       echo -e "${Y}  ⚠ API недоступен — генерируем I1 локально${N}"
       case "$MIMICRY_PROFILE" in
-        quic_initial) I1=$(_gen_i1_quic_initial "$domain") ;;
-        quic_0rtt)    I1=$(_gen_i1_quic_0rtt "$domain") ;;
-        tls)          I1=$(_gen_i1_tls13 "$domain") ;;
-        dtls)         I1=$(_gen_i1_dtls13 "$domain") ;;
-        sip)          I1=$(_gen_i1_sip "$domain") ;;
-        *)            I1=$(_gen_i1_quic_initial "$domain") ;;
+        tls)  I1=$(_gen_i1_tls13 "$domain") ;;
+        dtls) I1=$(_gen_i1_dtls13 "$domain") ;;
+        sip)  I1=$(_gen_i1_sip "$domain") ;;
+        *)    I1=$(_gen_i1_tls13 "$domain") ;;
       esac
       if [[ -n "$I1" ]]; then
         echo -e "${G}  ✓ I1 сгенерирован локально (длина: ${#I1} байт)${N}"
       else
         warn "Не удалось сгенерировать I1"; I1=""
       fi
-    else
-      echo -e "${G}  ✓ I1 получен через API (длина: ${#I1} байт)${N}"
     fi
     if [[ -n "$I1" ]] && ! validate_i1 "$I1"; then
       echo -e "${Y}  → I1 отключен из-за проблем${N}"
@@ -635,7 +541,7 @@ show_header() {
   IFS='|' read -r ip port st clients <<< "$s"
   echo -e "${B}╔══════════════════════════════════════════════╗${N}"
   echo -e "${B}║${W}        AmneziaWG Manager v5.0                ${B}║${N}"
-  echo -e "${B}║${C}     AWG 2.0 only — QUIC/TLS/DTLS/SIP/DNS     ${B}║${N}"
+  echo -e "${B}║${C}       AWG 2.0 only — TLS/DTLS/SIP/DNS         ${B}║${N}"
   echo -e "${B}╚══════════════════════════════════════════════╝${N}"
   echo -e "${B}  IP сервера : ${W}$ip${N}"
   echo -e "${B}  Порт       : ${W}$port${N}"
@@ -963,6 +869,7 @@ do_gen() {
     log_info "do_gen: awg-quick up успешно"
   else
     log_err "do_gen: awg-quick up провалился"
+    warn "awg-quick up не удался. Попробуй перезагрузить сервер или пункт 6 — Перезапустить"
   fi
 
   if command -v ufw &>/dev/null; then
@@ -1063,6 +970,7 @@ do_add_client() {
   srv_ip=$(get_public_ip)
   [[ -z "$srv_ip" ]] && { err "не удалось получить внешний IP"; return 1; }
   port=$(grep "^ListenPort = " "$SERVER_CONF" | awk -F'= ' '{print $2}' | tr -d ' ')
+  [[ -z "$port" ]] && { err "ListenPort не найден в конфиге сервера"; return 1; }
   mtu=$(grep "^MTU = " "$SERVER_CONF" | awk -F'= ' '{print $2}' | head -1)
   mtu=${mtu:-1380}
 
@@ -1386,8 +1294,8 @@ do_check_domains() {
   local available=0
   local total=0
 
-  echo -e "${C}  QUIC Initial (HTTP/3):${N}"
-  for domain in yandex.net yastatic.net vk.com mail.ru ozon.ru wildberries.ru sber.ru tbank.ru gcore.com fastly.net; do
+  echo -e "${C}  TLS / General домены:${N}"
+  for domain in yandex.ru vk.com mail.ru ozon.ru wildberries.ru sberbank.ru tbank.ru gosuslugi.ru github.com google.com; do
     total=$((total + 1))
     if timeout 2 ping -c 1 -W 1 "$domain" &>/dev/null 2>&1; then
       echo -e "    ${G}✓${N} $domain"
