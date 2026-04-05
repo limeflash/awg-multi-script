@@ -443,42 +443,37 @@ choose_mimicry_profile() {
       ;;
   esac
 
-  # Для профилей 1-6 и fallback:
-  # API → если получен QUIC Initial (0xC0/0xC1/0xD0) — заменяем на TLS 1.3 (совместимость)
-  # API недоступен → локальная генерация по профилю
+  # Логика генерации I1 по профилю:
+  # tls  → API, при fail → локально _gen_i1_tls13
+  # dtls → всегда локально _gen_i1_dtls13 (API не знает DTLS)
+  # sip  → всегда локально _gen_i1_sip    (API не знает SIP)
   if [[ "$PROFILE_CHOICE" != "6" ]] && [[ -n "$domain" ]]; then
-    echo -e "${C}  → Запрос I1 для $domain...${N}"
-    I1=$(fetch_i1_from_api "$domain") || I1=""
+    case "$MIMICRY_PROFILE" in
+      dtls)
+        echo -e "${C}  → Генерируем DTLS I1 для $domain...${N}"
+        I1=$(_gen_i1_dtls13 "$domain") || I1=""
+        ;;
+      sip)
+        echo -e "${C}  → Генерируем SIP I1 для $domain...${N}"
+        I1=$(_gen_i1_sip "$domain") || I1=""
+        ;;
+      *)
+        echo -e "${C}  → Запрос I1 для $domain...${N}"
+        I1=$(fetch_i1_from_api "$domain") || I1=""
+        if [[ -z "$I1" ]]; then
+          echo -e "${Y}  ⚠ API недоступен — генерируем TLS 1.3 локально${N}"
+          I1=$(_gen_i1_tls13 "$domain") || I1=""
+        fi
+        ;;
+    esac
     if [[ -n "$I1" ]]; then
-      # Проверяем: если API вернул QUIC Initial/0-RTT байты — заменяем на TLS 1.3
-      # QUIC Long Header: первый байт 0xC0-0xFF (бит 7=1, бит 6=1)
-      local i1_hex first_byte
-      i1_hex=$(echo "$I1" | grep -oP '(?<=<b 0x)[0-9a-fA-F]+' | head -1)
-      first_byte="${i1_hex:0:2}"
-      if [[ "$first_byte" =~ ^[cCdDeEfF] ]]; then
-        echo -e "${Y}  ⚠ API вернул QUIC Initial — заменяем на TLS 1.3 (совместимость клиентов)${N}"
-        I1=$(_gen_i1_tls13 "$domain")
-        echo -e "${G}  ✓ I1 TLS 1.3 сгенерирован (длина: ${#I1} байт)${N}"
-      else
-        echo -e "${G}  ✓ I1 получен через API (длина: ${#I1} байт)${N}"
+      echo -e "${G}  ✓ I1 готов (длина: ${#I1} байт)${N}"
+      if ! validate_i1 "$I1"; then
+        echo -e "${Y}  → I1 отключен из-за проблем${N}"
+        I1=""
       fi
     else
-      echo -e "${Y}  ⚠ API недоступен — генерируем I1 локально${N}"
-      case "$MIMICRY_PROFILE" in
-        tls)  I1=$(_gen_i1_tls13 "$domain") ;;
-        dtls) I1=$(_gen_i1_dtls13 "$domain") ;;
-        sip)  I1=$(_gen_i1_sip "$domain") ;;
-        *)    I1=$(_gen_i1_tls13 "$domain") ;;
-      esac
-      if [[ -n "$I1" ]]; then
-        echo -e "${G}  ✓ I1 сгенерирован локально (длина: ${#I1} байт)${N}"
-      else
-        warn "Не удалось сгенерировать I1"; I1=""
-      fi
-    fi
-    if [[ -n "$I1" ]] && ! validate_i1 "$I1"; then
-      echo -e "${Y}  → I1 отключен из-за проблем${N}"
-      I1=""
+      warn "Не удалось сгенерировать I1"; I1=""
     fi
   fi
 }
@@ -1625,7 +1620,7 @@ while true; do
    11) do_restore ;;
     0) log_info "Выход"
        echo -e "\n${G}  Пока!${N}"
-       echo -e "${C}  Жми - ${W}https://t.me/+c9ag3eX-zaNlMjEy${N}\n"
+       echo -e "${C}  Тык - ${W}https://t.me/+c9ag3eX-zaNlMjEy${N}\n"
        exit 0 ;;
     *)
       warn "Неверный выбор"
