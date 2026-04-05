@@ -22,8 +22,9 @@
 sudo curl -fsSL https://raw.githubusercontent.com/pumbaX/awg-multi-script/main/awg2.sh -o /usr/local/bin/awg2
 sudo chmod +x /usr/local/bin/awg2
 ```
-```bash
+
 # Запуск в любой момент
+```bash
 sudo awg2
 ```
 ---
