@@ -2788,8 +2788,8 @@ while true; do
     0) log_info "Выход"
        echo -e "\n${G}  В путь!!! https://t.me/awgToolza ${N}"
        echo -e "\n▓▒░ DPI ОТСТОЙ! ░▒▓"
-       echo -e "<< НЕТ КОНТРОЛЮ!!! >>"
-       echo -e "<< VIVAT СВОБОДНЫЙ ИНТЕРНЕТ!!! >>\n"
+       echo -e "<< НЕТ КОНТРОЛЮ >>"
+       echo -e "<< VIVAT СВОБОДНЫЙ ИНТЕРНЕТ >>\n"
        exit 0 ;;
     *)
       warn "Неверный выбор"
