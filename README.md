@@ -29,6 +29,7 @@ sudo awg2
 ---
 
 **На кофе:** https://boosty.to/awgtoolza/donate
+
 Адрес USDT TRC20:
 TN2rQAsGNHQr8wnneKRD14UMX629D2Ca5q
 
