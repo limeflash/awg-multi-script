@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="v5.1"
+VERSION="v5.2"
 
 # ─────────────────────────────────────────────────────────────
 # - AmneziaWG Toolza — только AWG 2.0
@@ -90,6 +90,7 @@ DTLS_DOMAINS_RU=(
 SIP_DOMAINS_RU=(
   "sip.beeline.ru" "sip.mts.ru" "sip.megafon.ru" "sip.rostelecom.ru"
   "sip.yandex.ru" "sip.vk.com" "sip.mail.ru" "sip.sipnet.ru"
+  "sip.tele2.ru" "sip.ucoz.ru"
 )
 # HTTP/3 (QUIC) — реально раздают h3 в РФ сегменте или не блокируются
 QUIC_DOMAINS_RU=(
@@ -108,8 +109,24 @@ DTLS_DOMAINS_WORLD=(
   "stun.l.google.com" "stun1.l.google.com"
 )
 SIP_DOMAINS_WORLD=(
+  # Глобальные SIP-провайдеры
   "sip.zadarma.com" "sip.iptel.org" "sip.linphone.org"
   "sip.antisip.com" "sip.cloudflare.com"
+  # Европа — Германия
+  "sipgate.de" "sip.dus.net" "sip.easybell.de" "sip.1und1.de"
+  "sip.t-online.de" "sipcall.de"
+  # Европа — Франция
+  "sip.ovh.net" "sip.free.fr" "sip.numericable.fr"
+  # Европа — Великобритания
+  "sip.voipfone.co.uk" "sip.voiptalk.org" "sip.gradwell.com"
+  "sip.sipgate.co.uk"
+  # Европа — Нидерланды/Швейцария/Австрия
+  "sip.voipgate.com" "sip.voys.nl" "sip.peoplefone.ch"
+  "sip.fonira.com"
+  # Италия / Испания
+  "sip.messagenet.it" "sip.eutelia.it" "sip.fonyou.com"
+  # Скандинавия
+  "sip.bahnhof.se" "sip.com.no"
 )
 # HTTP/3 (QUIC) — все реально отвечают h3 на UDP/443
 QUIC_DOMAINS_WORLD=(
@@ -952,125 +969,213 @@ choose_mimicry_profile() {
 _AWG_PCAP_ANALYZER='
 import sys, struct
 
-with open(sys.argv[1], "rb") as f:
-    gh = f.read(24)
-    if len(gh) < 24:
-        print("FAIL: pcap слишком короткий"); sys.exit(1)
-    ph = f.read(16)
-    if len(ph) < 16:
-        print("FAIL: нет первого пакета"); sys.exit(1)
-    incl_len = struct.unpack("<I", ph[8:12])[0]
-    pkt = f.read(incl_len)
+# ── Читаем pcap, возвращаем список UDP payload ──
+def read_pcap(path):
+    payloads = []
+    with open(path, "rb") as f:
+        gh = f.read(24)
+        if len(gh) < 24:
+            return payloads
+        while True:
+            ph = f.read(16)
+            if len(ph) < 16:
+                break
+            incl_len = struct.unpack("<I", ph[8:12])[0]
+            pkt = f.read(incl_len)
+            if len(pkt) < 42:
+                continue
+            eth_type = struct.unpack(">H", pkt[12:14])[0]
+            if eth_type != 0x0800:
+                continue
+            ihl = (pkt[14] & 0x0f) * 4
+            udp_off = 14 + ihl
+            if udp_off + 8 > len(pkt):
+                continue
+            udp_len = struct.unpack(">H", pkt[udp_off+4:udp_off+6])[0]
+            payload_off = udp_off + 8
+            payload = pkt[payload_off:payload_off + (udp_len - 8)]
+            if len(payload) >= 20:
+                payloads.append(payload)
+    return payloads
 
-if len(pkt) < 42:
-    print("FAIL: пакет короче 42B"); sys.exit(1)
+# ── Детектор профиля для одного payload ──
+def detect(payload):
+    """Возвращает (profile_name, [(level, msg)...]) или (None, []) если не распознан"""
+    res = []
+    def ok(m): res.append(("OK", m))
+    def info(m): res.append(("INFO", m))
+    def bad(m): res.append(("FAIL", m))
 
-eth_type = struct.unpack(">H", pkt[12:14])[0]
-if eth_type != 0x0800:
-    print(f"FAIL: не IPv4 (ethertype=0x{eth_type:04x})"); sys.exit(1)
+    # 1) SIP — текстовый ASCII в начале
+    sip_methods = (b"INVITE", b"REGISTER", b"OPTIONS", b"MESSAGE",
+                   b"SUBSCRIBE", b"NOTIFY", b"PUBLISH", b"BYE",
+                   b"CANCEL", b"ACK ", b"INFO ", b"REFER", b"PRACK",
+                   b"UPDATE", b"SIP/2.0")
+    for m in sip_methods:
+        if payload.startswith(m):
+            ok(f"SIP пакет ({m.decode().strip()})")
+            return ("sip", res)
 
-ihl = (pkt[14] & 0x0f) * 4
-udp_off = 14 + ihl
-udp_len = struct.unpack(">H", pkt[udp_off+4:udp_off+6])[0]
-payload_off = udp_off + 8
-payload = pkt[payload_off:payload_off + (udp_len - 8)]
+    # 2) TLS 1.x record
+    if payload[0] == 0x16 and payload[1:3] == b"\x03\x01":
+        ok("TLS record (type=0x16, ver=0x0301)")
+        if len(payload) >= 6 and payload[5] == 0x01:
+            ok("TLS ClientHello (handshake type=01)")
+        return ("tls", res)
 
-if len(payload) < 20:
-    print(f"FAIL: UDP payload {len(payload)}B слишком мал"); sys.exit(1)
+    # 3) DTLS record (1.2 = fefd, 1.0 = feff)
+    if payload[0] == 0x16 and payload[1:3] in (b"\xfe\xfd", b"\xfe\xff"):
+        ver = "1.2" if payload[1:3] == b"\xfe\xfd" else "1.0"
+        ok(f"DTLS {ver} record (handshake)")
+        if len(payload) >= 14 and payload[13] == 0x01:
+            ok("DTLS ClientHello")
+        return ("dtls", res)
 
-results = []
-def ok(msg): results.append(("OK", msg))
-def bad(msg): results.append(("FAIL", msg))
-def info(msg): results.append(("INFO", msg))
+    # 4) DNS query
+    if len(payload) >= 12:
+        flags = payload[2]
+        qr = (flags >> 7) & 1
+        opcode = (flags >> 3) & 0xf
+        qdcount = struct.unpack(">H", payload[4:6])[0]
+        if qr == 0 and opcode == 0 and 1 <= qdcount <= 10 and payload[3] in (0x00, 0x20, 0x80, 0xa0):
+            # Доп. проверка: первый label валиден (длина 1-63)
+            label_len = payload[12]
+            if 1 <= label_len <= 63:
+                ok(f"DNS query (qdcount={qdcount}, EDNS возможен)")
+                return ("dns", res)
 
-first = payload[0]
-form = (first >> 7) & 1
-fixed = (first >> 6) & 1
-ptype = (first >> 4) & 3
-pn_len = (first & 3) + 1
+    # 5) QUIC long header (form=1, fixed=1, type 0/1/2)
+    first = payload[0]
+    form = (first >> 7) & 1
+    fixed = (first >> 6) & 1
+    ptype = (first >> 4) & 3
+    pn_len = (first & 3) + 1
+    if form == 1 and fixed == 1 and ptype != 3:
+        ok(f"Long header (first_byte=0x{first:02x})")
+        ptype_names = {0: "Initial", 1: "0-RTT", 2: "Handshake"}
+        ok(f"QUIC type: {ptype_names[ptype]} (bits={ptype:02b})")
+        ok(f"PN length: {pn_len} байт")
 
-if form == 1 and fixed == 1:
-    ok(f"Long header (first_byte=0x{first:02x})")
-    ptype_names = {0: "Initial", 1: "0-RTT", 2: "Handshake", 3: "Retry"}
-    tname = ptype_names.get(ptype, "?")
-    ok(f"QUIC type: {tname} (bits={ptype:02b})")
-    ok(f"PN length: {pn_len} байт")
+        version = payload[1:5].hex()
+        known = {
+            "00000001": "QUIC v1 (RFC 9000)",
+            "6b3343cf": "QUIC v2 (RFC 9369)",
+        }
+        if version in known:
+            ok(f"Version: 0x{version} ({known[version]})")
+        else:
+            info(f"Version: 0x{version} (нестандартная)")
 
-    version = payload[1:5].hex()
-    known = {
-        "00000001": "QUIC v1 (RFC 9000)",
-        "6b3343cf": "QUIC v2 (RFC 9369)",
-    }
-    if version in known:
-        ok(f"Version: 0x{version} ({known[version]})")
-    else:
-        info(f"Version: 0x{version} (нестандартная)")
-
-    dcid_len = payload[5]
-    if dcid_len == 8:
-        ok(f"DCID length: 8 (Chrome-style)")
-    elif 1 <= dcid_len <= 20:
-        info(f"DCID length: {dcid_len} (валидно, не Chrome-default)")
-    else:
-        bad(f"DCID length: {dcid_len} (вне диапазона)")
-
-    off = 6 + dcid_len
-    scid_len = payload[off]
-    if scid_len == 0:
-        ok(f"SCID length: 0 (Chrome-style клиент)")
-    else:
-        info(f"SCID length: {scid_len}")
-    off += 1 + scid_len
-
-    if ptype == 0:
-        def rv(buf, pos):
-            b0 = buf[pos]; ln = 1 << (b0 >> 6); val = b0 & 0x3f
-            for i in range(1, ln): val = (val << 8) | buf[pos+i]
-            return val, pos + ln
         try:
-            tok_len, off2 = rv(payload, off)
-            if tok_len == 0:
-                ok("Token Length: 0 (Chrome без NEW_TOKEN)")
+            dcid_len = payload[5]
+            if dcid_len == 8:
+                ok("DCID length: 8 (Chrome-style)")
+            elif 1 <= dcid_len <= 20:
+                info(f"DCID length: {dcid_len}")
             else:
-                info(f"Token Length: {tok_len}")
-            off2 += tok_len
-            plen, off3 = rv(payload, off2)
-            expected_total = off3 + plen
-            actual = len(payload)
-            diff = abs(expected_total - actual)
-            if diff <= 2:
-                ok(f"Payload Length varint: {plen} (совпадает, Δ={diff})")
+                bad(f"DCID length: {dcid_len} (вне диапазона)")
+                return ("quic", res)
+
+            off = 6 + dcid_len
+            scid_len = payload[off]
+            if scid_len == 0:
+                ok("SCID length: 0 (Chrome-style клиент)")
+            elif scid_len <= 20:
+                info(f"SCID length: {scid_len}")
             else:
-                info(f"Payload Length varint: {plen}, UDP: {actual} (Δ={diff})")
+                bad(f"SCID length: {scid_len} (вне диапазона)")
+                return ("quic", res)
+            off += 1 + scid_len
+
+            if ptype == 0:
+                def rv(buf, pos):
+                    b0 = buf[pos]; ln = 1 << (b0 >> 6); val = b0 & 0x3f
+                    for i in range(1, ln): val = (val << 8) | buf[pos+i]
+                    return val, pos + ln
+                tok_len, off2 = rv(payload, off)
+                if tok_len == 0:
+                    ok("Token Length: 0 (Chrome без NEW_TOKEN)")
+                elif tok_len < 100:
+                    info(f"Token Length: {tok_len}")
+                else:
+                    bad(f"Token Length: {tok_len} (подозрительно большой)")
+                    return ("quic", res)
+                off2 += tok_len
+                plen, off3 = rv(payload, off2)
+                expected_total = off3 + plen
+                actual = len(payload)
+                diff = abs(expected_total - actual)
+                if diff <= 4:
+                    ok(f"Payload Length varint: {plen} (Δ={diff})")
+                else:
+                    info(f"Payload Length varint: {plen}, UDP: {actual} (Δ={diff})")
         except Exception as e:
-            bad(f"Varint parse error: {e}")
-elif payload[0] == 0x16 and payload[1:3] == b"\x03\x01":
-    ok("TLS record (type=0x16, ver=0x0301)")
-    if len(payload) >= 6 and payload[5] == 0x01:
-        ok("TLS ClientHello (handshake type=01)")
-elif payload[0] == 0x16 and payload[1:3] == b"\xfe\xfd":
-    ok("DTLS 1.2 record")
-elif payload[0:8] == b"REGISTER":
-    ok("SIP REGISTER пакет")
-else:
-    info(f"Паттерн: first 4 bytes = {payload[:4].hex()}")
+            info(f"Парсинг QUIC прерван: {type(e).__name__}")
+        return ("quic", res)
 
-sz = len(payload)
-if 1100 <= sz <= 1500:
-    ok(f"UDP payload size: {sz}B (Chrome-like)")
+    # Не распознан
+    return (None, [])
+
+# ── Main ──
+payloads = read_pcap(sys.argv[1])
+if not payloads:
+    print("FAIL|pcap пуст или нечитаем")
+    print("VERDICT|FAIL|нет валидных UDP пакетов")
+    sys.exit(0)
+
+# Перебираем все пакеты, ищем первый с распознанным профилем
+chosen_idx = -1
+chosen_profile = None
+chosen_results = []
+for i, pl in enumerate(payloads):
+    profile, results = detect(pl)
+    if profile is not None:
+        chosen_idx = i
+        chosen_profile = profile
+        chosen_results = results
+        break
+
+if chosen_profile is None:
+    # Ни один пакет не распознан — показываем первый как неизвестный
+    pl = payloads[0]
+    print(f"INFO|Захвачено пакетов: {len(payloads)}")
+    print(f"INFO|Размеры: {[len(p) for p in payloads]}")
+    print(f"INFO|Первый пакет ({len(pl)}B): first 8 bytes = {pl[:8].hex()}")
+    print("INFO|Профиль не распознан — возможно junk-пакет (Jc) или handshake init")
+    print("VERDICT|CHECK|неизвестный профиль (попробуй reconnect ещё раз)")
+    sys.exit(0)
+
+# Распознали — выводим
+pl = payloads[chosen_idx]
+sz = len(pl)
+print(f"INFO|Захвачено пакетов: {len(payloads)}, выбран #{chosen_idx+1} ({sz}B)")
+for level, msg in chosen_results:
+    print(f"{level}|{msg}")
+
+if 1000 <= sz <= 1500:
+    print(f"OK|UDP payload size: {sz}B (Chrome-like)")
+elif 200 <= sz < 1000:
+    print(f"OK|UDP payload size: {sz}B (компактный CPS)")
 elif sz >= 100:
-    info(f"UDP payload size: {sz}B")
+    print(f"INFO|UDP payload size: {sz}B (маленький)")
 else:
-    bad(f"UDP payload size: {sz}B (мало)")
+    print(f"FAIL|UDP payload size: {sz}B (слишком мало)")
 
-PASS = sum(1 for r,_ in results if r == "OK")
-FAIL = sum(1 for r,_ in results if r == "FAIL")
-for r, m in results:
-    sym = {"OK":"OK","FAIL":"FAIL","INFO":"INFO"}[r]
-    print(f"{sym}|{m}")
 print()
-if FAIL == 0 and PASS >= 3:
-    print("VERDICT|PASS")
+
+PASS = sum(1 for r,_ in chosen_results if r == "OK")
+FAIL = sum(1 for r,_ in chosen_results if r == "FAIL")
+
+# Для маленьких протоколов (DNS, SIP) минимум размера ниже
+size_min = 80 if chosen_profile in ("dns", "sip") else 200
+size_ok = sz >= size_min
+
+# Бонусный +1 если размер ок (учитываем что может быть OK от print выше тоже)
+# Простое правило: если профиль распознан, есть хоть 1 OK от detect, и размер >= min — PASS
+if FAIL == 0 and PASS >= 1 and size_ok:
+    print(f"VERDICT|PASS|{chosen_profile}")
+elif FAIL == 0:
+    print(f"VERDICT|CHECK|размер {sz}B мал для {chosen_profile}")
 else:
     print(f"VERDICT|CHECK|{PASS} ok, {FAIL} fail")
 '
@@ -1129,34 +1234,41 @@ do_sniff_test() {
   mapfile -t peer_list < <(echo "$endpoints_raw" | awk '{print $1}')
   mapfile -t ep_list < <(echo "$endpoints_raw" | awk '{print $2}')
 
-  # Получаем имена клиентов из SERVER_CONF (из комментариев # name)
+  # Сопоставление peer pubkey → (имя файла, VPN IP)
+  # Сканируем /root/*_awg2.conf, вычисляем pubkey из PrivateKey, мапим
   local -a name_list=()
+  local -a vpn_ip_list=()
+  declare -A pk_to_name pk_to_ip
+  local cf cf_priv cf_pub cf_addr cf_basename
+  for cf in /root/*_awg2.conf; do
+    [[ -f "$cf" ]] || continue
+    cf_priv=$(grep -E '^PrivateKey' "$cf" 2>/dev/null | awk -F'= ' '{print $2}' | tr -d ' \r' | head -1)
+    [[ -z "$cf_priv" ]] && continue
+    cf_pub=$(echo "$cf_priv" | awg pubkey 2>/dev/null) || continue
+    cf_addr=$(grep -E '^Address' "$cf" 2>/dev/null | awk -F'= ' '{print $2}' | tr -d ' \r' | head -1)
+    cf_basename=$(basename "$cf" .conf)
+    pk_to_name["$cf_pub"]="$cf_basename"
+    pk_to_ip["$cf_pub"]="${cf_addr%/*}"
+  done
+
   local pk
   for pk in "${peer_list[@]}"; do
-    # Ищем блок [Peer] с PublicKey = pk, берём комментарий # name перед ним
-    local cname
-    cname=$(awk -v tgt="$pk" '
-      /^\[Peer\]/ {inpeer=1; pname=""}
-      inpeer && /^# / {pname=substr($0,3)}
-      inpeer && /^PublicKey/ {
-        gsub(/[ \t]/,""); split($0,a,"="); key=a[2]"="a[3]
-        if (key ~ tgt || tgt ~ key) {print pname; exit}
-      }
-    ' "$SERVER_CONF" 2>/dev/null)
-    name_list+=("${cname:-client}")
+    name_list+=("${pk_to_name[$pk]:-неизвестен}")
+    vpn_ip_list+=("${pk_to_ip[$pk]:-?}")
   done
 
   local client_ep client_ip sel_idx=0
   if [[ ${#ep_list[@]} -eq 1 ]]; then
     sel_idx=0
     client_ep="${ep_list[0]}"
-    echo -e "${C}  → Клиент: ${W}${name_list[0]} ${D}(${client_ep})${N}"
+    echo -e "${C}  → Клиент: ${W}${name_list[0]}${N} ${D}(VPN ${vpn_ip_list[0]} • ext ${client_ep})${N}"
   else
     echo ""
     echo -e "${C}  Подключённых клиентов: ${W}${#ep_list[@]}${N}"
     local k
     for k in "${!ep_list[@]}"; do
-      printf "  ${G}%d)${N} %-20s ${D}%s${N}\n" "$((k+1))" "${name_list[$k]}" "${ep_list[$k]}"
+      printf "  ${G}%d)${N} %-26s ${C}%-15s${N} ${D}%s${N}\n" \
+        "$((k+1))" "${name_list[$k]}" "${vpn_ip_list[$k]}" "${ep_list[$k]}"
     done
     local PEER_SEL
     read -rp "$(echo -e "${C}  Выбор клиента для теста [1-${#ep_list[@]}] (Enter = 1): ${N}")" PEER_SEL
@@ -1167,7 +1279,7 @@ do_sniff_test() {
     fi
     sel_idx=$((PEER_SEL - 1))
     client_ep="${ep_list[$sel_idx]}"
-    echo -e "${C}  → Клиент: ${W}${name_list[$sel_idx]} ${D}(${client_ep})${N}"
+    echo -e "${C}  → Клиент: ${W}${name_list[$sel_idx]}${N} ${D}(VPN ${vpn_ip_list[$sel_idx]} • ext ${client_ep})${N}"
   fi
   client_ip="${client_ep%:*}"
 
@@ -1195,14 +1307,16 @@ do_sniff_test() {
   local analyzer="/tmp/awg_pcap_analyzer_$$.py"
   echo "$_AWG_PCAP_ANALYZER" > "$analyzer"
 
-  # 9. tcpdump: ловим 1 большой пакет (>1000B) от клиента на ListenPort
+  # 9. tcpdump: ловим первые 10 пакетов >100B от клиента на ListenPort
+  # CPS пакеты могут быть маленькими (SIP/DNS ~80-600B), не только >1000B
+  # Анализатор переберёт все и выберет первый распознанный профиль
   local pcap="/tmp/awg_dpi_test_$$.pcap"
   echo -e "${C}  → Запускаю tcpdump (20с)...${N}"
   echo -e "${C}    Подключайся с клиента ПРЯМО СЕЙЧАС${N}"
   echo ""
 
-  timeout 20 tcpdump -i "$wan_if" -nn -c 1 \
-    "udp port ${listen_port} and src host ${client_ip} and greater 1000" \
+  timeout 20 tcpdump -i "$wan_if" -nn -c 10 \
+    "udp port ${listen_port} and src host ${client_ip} and greater 100" \
     -w "$pcap" 2>/dev/null || true
 
   if [[ ! -s "$pcap" ]]; then
@@ -1223,8 +1337,8 @@ do_sniff_test() {
   analysis=$(python3 "$analyzer" "$pcap" 2>&1) || analysis="FAIL|Python parse error"
 
   # 11. Красивый вывод
-  local verdict=""
-  while IFS='|' read -r tag msg _extra; do
+  local verdict="" verdict_extra=""
+  while IFS='|' read -r tag msg extra; do
     [[ -z "$tag" ]] && continue
     case "$tag" in
       OK)   echo -e "  ${G}√${N} $msg" ;;
@@ -1232,6 +1346,7 @@ do_sniff_test() {
       INFO) echo -e "  ${D}·${N} $msg" ;;
       VERDICT)
         verdict="$msg"
+        verdict_extra="$extra"
         ;;
     esac
   done <<< "$analysis"
@@ -1239,9 +1354,11 @@ do_sniff_test() {
   echo ""
   echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
   if [[ "$verdict" == "PASS" ]]; then
-    echo -e "${G}  √ Всё заебись!!! — DPI-мимикрия работает${N}"
+    local prof_label="${verdict_extra^^}"
+    echo -e "${G}  √ Всё заебись!!! — ${prof_label} мимикрия работает${N}"
   elif [[ "$verdict" == "CHECK" ]]; then
     echo -e "${Y}  ▲ Проверь warnings выше${N}"
+    [[ -n "$verdict_extra" ]] && echo -e "${D}    ${verdict_extra}${N}"
   else
     echo -e "${R}  × Анализ не удался${N}"
   fi
@@ -2761,7 +2878,7 @@ AWG_PARAMS_LINES=""
 ERROR_COUNT=0
 
 touch "$LOG_FILE" 2>/dev/null && chmod 600 "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/awg-manager.log"
-log_info "=== AWG Toolza v5.1 запущен ==="
+log_info "=== AWG Toolza v5.2 запущен ==="
 
 # Trap EXIT — cleanup временных файлов
 trap 'rm -rf /tmp/awg_tmp_* /tmp/awg_ping_* 2>/dev/null || true' EXIT
@@ -2786,10 +2903,10 @@ while true; do
    11) do_restore ;;
    12) do_sniff_test ;;
     0) log_info "Выход"
-       echo -e "\n${G}  В путь!!! https://t.me/awgToolza ${N}"
+       echo -e "\n${G}  В путь! ${N}"
        echo -e "\n▓▒░ DPI ОТСТОЙ! ░▒▓"
-       echo -e "<< НЕТ КОНТРОЛЮ >>"
-       echo -e "<< VIVAT СВОБОДНЫЙ ИНТЕРНЕТ >>\n"
+       echo -e "<< НЕТ КОНТРОЛЮ! >>"
+       echo -e "<< VIVAT СВОБОДНЫЙ ИНТЕРНЕТ! >>\n"
        exit 0 ;;
     *)
       warn "Неверный выбор"
