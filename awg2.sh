@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="v5.2"
+VERSION="v5.3"
 
 # ─────────────────────────────────────────────────────────────
 # - AmneziaWG Toolza — только AWG 2.0
@@ -150,8 +150,8 @@ choose_region() {
   echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
   echo -e "${W}                  Регион сервера${N}"
   echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
-  echo -e "  ${G}1${N}  Европа / Мир  — глобальные домены (рекомендуется)"
-  echo -e "  ${G}2${N}  Россия        — RU домены"
+  echo -e "  ${G}1${N}  Европа / Мир "
+  echo -e "  ${G}2${N}  Россия — RU домены"
   echo -e "${W}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
   local REGION_CHOICE
   read -rp "$(echo -e "${C}  Выбор [1-2] (Enter = 1): ${N}")" REGION_CHOICE
@@ -1390,6 +1390,28 @@ check_deps() {
   command -v awg &>/dev/null && HAS_AWG=true
   command -v qrencode &>/dev/null && HAS_QRENCODE=true
   [[ -f "$SERVER_CONF" ]] && HAS_SERVER_CONF=true
+
+  # Восстанавливаем SERVER_REGION из шапки конфига если сервер создан
+  if [[ -f "$SERVER_CONF" ]]; then
+    local saved_region
+    saved_region=$(grep -oP '^#\s*Region:\s*\K\w+' "$SERVER_CONF" 2>/dev/null | head -1 || true)
+    if [[ -n "$saved_region" ]]; then
+      SERVER_REGION="$saved_region"
+      # Пересобираем активные пулы под регион
+      if [[ "$saved_region" == "ru" ]]; then
+        TLS_CLIENT_HELLO_DOMAINS=("${TLS_DOMAINS_RU[@]}")
+        DTLS_DOMAINS=("${DTLS_DOMAINS_RU[@]}")
+        SIP_DOMAINS=("${SIP_DOMAINS_RU[@]}")
+        QUIC_DOMAINS=("${QUIC_DOMAINS_RU[@]}")
+      else
+        TLS_CLIENT_HELLO_DOMAINS=("${TLS_DOMAINS_WORLD[@]}")
+        DTLS_DOMAINS=("${DTLS_DOMAINS_WORLD[@]}")
+        SIP_DOMAINS=("${SIP_DOMAINS_WORLD[@]}")
+        QUIC_DOMAINS=("${QUIC_DOMAINS_WORLD[@]}")
+      fi
+    fi
+  fi
+
   # Проверка конфигов клиентов
   local f
   for f in /root/*_awg2.conf; do
@@ -1503,9 +1525,9 @@ show_menu() {
 
   # Пункт 3 — нужен awg + конфиг сервера
   if $HAS_AWG && $HAS_SERVER_CONF; then
-    echo -e "  ${W}◇  3)${N} Добавить клиента"
+    echo -e "  ${W}◇  3)${N} Управление клиентами (добавить/переименовать/удалить)"
   else
-    echo -e "  ${D}◇  3)${N} Добавить клиента ${D}(нужен пункт 2)${N}"
+    echo -e "  ${D}◇  3)${N} Управление клиентами ${D}(нужен пункт 2)${N}"
   fi
 
   # Пункт 4 — нужен awg + конфиг сервера
@@ -1611,30 +1633,41 @@ gen_awg_params() {
   S2=$(( S1 + S2_OFF ))
   [[ $S2 -gt 1188 ]] && S2=1188 || true
   S3=$(rand_range 5 64)
-  S4=$(rand_range 1 16)
-  Q=1073741823  # 2^30 - 1, базовый квадрант
+  S4=$(rand_range 3 29)
+  Q=1073741823  # 2^30 - 1, базовый квадрант uint32
 
-  # Непересекающиеся диапазоны H1-H4 по квадрантам
+  # Строгое разбиение по квадрантам:
+  #   H1 ∈ Q0 [5 .. Q]
+  #   H2 ∈ Q1 [Q+1 .. 2Q]
+  #   H3 ∈ Q2 [2Q+1 .. 3Q]
+  #   H4 ∈ Q3 [3Q+1 .. 4Q]
+  # Ширина каждого диапазона: 30000-130000 (рекомендация AWG 2.0)
+  # Маржа 130000 на каждом конце чтобы диапазон гарантированно влез в квадрант
   local H1_START H1_END H1 H2_START H2_END H2 H3_START H3_END H3 H4_START H4_END H4
+  local MARGIN=130000
 
-  H1_START=$(rand_range 5 $((Q - 1)))
-  H1_END=$(rand_range $((H1_START + 30000)) $((H1_START + 130000)))
-  [[ $H1_END -gt $((Q - 1)) ]] && H1_END=$((Q - 1)) || true
+  # H1 в Q0
+  H1_START=$(rand_range 5 $((Q - MARGIN)))
+  H1_END=$(rand_range $((H1_START + 30000)) $((H1_START + MARGIN)))
+  [[ $H1_END -gt $Q ]] && H1_END=$Q || true
   H1="${H1_START}-${H1_END}"
 
-  H2_START=$(rand_range $((H1_END + 1)) $((Q * 2 - 1)))
-  H2_END=$(rand_range $((H2_START + 30000)) $((H2_START + 130000)))
-  [[ $H2_END -gt $((Q * 2 - 1)) ]] && H2_END=$((Q * 2 - 1)) || true
+  # H2 в Q1 — стартует от Q+1, НЕ от H1_END
+  H2_START=$(rand_range $((Q + 1)) $((2 * Q - MARGIN)))
+  H2_END=$(rand_range $((H2_START + 30000)) $((H2_START + MARGIN)))
+  [[ $H2_END -gt $((2 * Q)) ]] && H2_END=$((2 * Q)) || true
   H2="${H2_START}-${H2_END}"
 
-  H3_START=$(rand_range $((H2_END + 1)) $((Q * 3 - 1)))
-  H3_END=$(rand_range $((H3_START + 30000)) $((H3_START + 130000)))
-  [[ $H3_END -gt $((Q * 3 - 1)) ]] && H3_END=$((Q * 3 - 1)) || true
+  # H3 в Q2 — стартует от 2Q+1
+  H3_START=$(rand_range $((2 * Q + 1)) $((3 * Q - MARGIN)))
+  H3_END=$(rand_range $((H3_START + 30000)) $((H3_START + MARGIN)))
+  [[ $H3_END -gt $((3 * Q)) ]] && H3_END=$((3 * Q)) || true
   H3="${H3_START}-${H3_END}"
 
-  H4_START=$(rand_range $((H3_END + 1)) $((Q * 4 - 1)))
-  H4_END=$(rand_range $((H4_START + 30000)) $((H4_START + 130000)))
-  [[ $H4_END -gt $((Q * 4 - 1)) ]] && H4_END=$((Q * 4 - 1)) || true
+  # H4 в Q3 — стартует от 3Q+1
+  H4_START=$(rand_range $((3 * Q + 1)) $((4 * Q - MARGIN)))
+  H4_END=$(rand_range $((H4_START + 30000)) $((H4_START + MARGIN)))
+  [[ $H4_END -gt $((4 * Q)) ]] && H4_END=$((4 * Q)) || true
   H4="${H4_START}-${H4_END}"
 
   AWG_PARAMS_LINES="Jc = $Jc\nJmin = $Jmin\nJmax = $Jmax\nS1 = $S1\nS2 = $S2\nS3 = $S3\nS4 = $S4\nH1 = $H1\nH2 = $H2\nH3 = $H3\nH4 = $H4"
@@ -1975,6 +2008,8 @@ do_gen() {
     ip link delete dev awg0 2>/dev/null || true
 
   {
+    echo "# AmneziaWG Toolza — AWG 2.0 server config"
+    echo "# Region: ${SERVER_REGION:-world}"
     echo "[Interface]"
     echo "PrivateKey = $srv_priv"
     echo "Address = $SERVER_ADDR"
@@ -1993,6 +2028,7 @@ do_gen() {
     echo "PostDown = iptables -t nat -D POSTROUTING -s $CLIENT_NET -o $iface -j MASQUERADE 2>/dev/null || true; iptables -D FORWARD -i awg0 -j ACCEPT 2>/dev/null || true; iptables -D FORWARD -o awg0 -j ACCEPT 2>/dev/null || true"
     echo ""
     echo "[Peer]"
+    echo "# client1"
     echo "PublicKey = $cli_pub"
     echo "PresharedKey = $psk"
     echo "AllowedIPs = $CLIENT_ADDR"
@@ -2082,7 +2118,276 @@ EOF
 }
 
 # ══════════════════════════════════════════════════════════
-# 3. ДОБАВИТЬ КЛИЕНТА
+# 3. УПРАВЛЕНИЕ КЛИЕНТАМИ (меню)
+# ══════════════════════════════════════════════════════════
+# Вспомогательная функция: выводит нумерованный список клиентов из SERVER_CONF
+# Заполняет глобальные массивы:
+#   MGMT_NAMES[]   — имена клиентов (из # comment или "безымянный")
+#   MGMT_PUBKEYS[] — PublicKey каждого
+#   MGMT_IPS[]     — AllowedIPs (VPN IP)
+# Возвращает 0 при успехе, 1 если клиентов нет
+_mgmt_scan_clients() {
+  MGMT_NAMES=()
+  MGMT_PUBKEYS=()
+  MGMT_IPS=()
+  local in_peer=0 cur_name="" cur_pk="" cur_ip=""
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^\[Peer\] ]]; then
+      # Сохраняем предыдущего если был
+      if [[ $in_peer -eq 1 && -n "$cur_pk" ]]; then
+        MGMT_NAMES+=("${cur_name:-безымянный}")
+        MGMT_PUBKEYS+=("$cur_pk")
+        MGMT_IPS+=("${cur_ip:-?}")
+      fi
+      in_peer=1
+      cur_name=""; cur_pk=""; cur_ip=""
+    elif [[ $in_peer -eq 1 ]]; then
+      if [[ "$line" =~ ^#[[:space:]](.+) ]]; then
+        cur_name="${BASH_REMATCH[1]}"
+      elif [[ "$line" =~ ^PublicKey[[:space:]]=[[:space:]](.+) ]]; then
+        cur_pk="${BASH_REMATCH[1]}"
+      elif [[ "$line" =~ ^AllowedIPs[[:space:]]=[[:space:]](.+) ]]; then
+        cur_ip="${BASH_REMATCH[1]}"
+      fi
+    fi
+  done < "$SERVER_CONF"
+  # Последний клиент
+  if [[ $in_peer -eq 1 && -n "$cur_pk" ]]; then
+    MGMT_NAMES+=("${cur_name:-безымянный}")
+    MGMT_PUBKEYS+=("$cur_pk")
+    MGMT_IPS+=("${cur_ip:-?}")
+  fi
+  [[ ${#MGMT_PUBKEYS[@]} -gt 0 ]]
+}
+
+# Выводит список клиентов с нумерацией
+_mgmt_print_list() {
+  local i
+  echo ""
+  echo -e "${C}  Клиентов: ${W}${#MGMT_PUBKEYS[@]}${N}"
+  for i in "${!MGMT_PUBKEYS[@]}"; do
+    printf "  ${G}%d)${N} %-26s ${C}%s${N}\n" "$((i+1))" "${MGMT_NAMES[$i]}" "${MGMT_IPS[$i]}"
+  done
+  echo ""
+}
+
+do_manage_clients() {
+  [[ ! -f "$SERVER_CONF" ]] && { warn "Конфиг сервера не найден. Сначала пункт 2"; return 0; }
+  command -v awg &>/dev/null || { warn "awg не найден"; return 0; }
+
+  while true; do
+    echo ""
+    hdr "⚙  Управление клиентами"
+    echo -e "  ${G}1)${N} Добавить клиента"
+    echo -e "  ${G}2)${N} Переименовать клиента"
+    echo -e "  ${R}3)${N} Удалить клиента"
+    echo -e "  ${W}0)${N} Назад в главное меню"
+    echo ""
+    local MGMT_CHOICE
+    read -rp "$(echo -e "${C}  Выбор [0-3]: ${N}")" MGMT_CHOICE
+    case "${MGMT_CHOICE:-}" in
+      1) do_add_client ;;
+      2) do_rename_client ;;
+      3) do_delete_client ;;
+      0) return 0 ;;
+      *) warn "Неверный выбор" ;;
+    esac
+    echo ""
+    read -rp "$(echo -e "${C}  Enter для продолжения...${N}")" _ || return 0
+  done
+}
+
+# ── Переименование клиента ──
+do_rename_client() {
+  _mgmt_scan_clients || { warn "Нет клиентов для переименования"; return 0; }
+  hdr "✎  Переименовать клиента"
+  _mgmt_print_list
+
+  local SEL
+  read -rp "$(echo -e "${C}  Номер клиента [1-${#MGMT_PUBKEYS[@]}] (0 = отмена): ${N}")" SEL
+  [[ "$SEL" == "0" || -z "$SEL" ]] && { info "Отменено"; return 0; }
+  if ! [[ "$SEL" =~ ^[0-9]+$ ]] || (( SEL < 1 || SEL > ${#MGMT_PUBKEYS[@]} )); then
+    warn "Неверный номер"; return 0
+  fi
+
+  local idx=$((SEL - 1))
+  local old_name="${MGMT_NAMES[$idx]}"
+  local pk="${MGMT_PUBKEYS[$idx]}"
+
+  echo -e "${C}  Текущее имя: ${W}$old_name${N}"
+  local new_name
+  read -rp "$(echo -e "${C}  Новое имя: ${N}")" new_name
+  if [[ -z "$new_name" ]]; then
+    warn "Имя не может быть пустым"; return 0
+  fi
+  if ! [[ "$new_name" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    warn "Имя содержит недопустимые символы (только A-Z a-z 0-9 _ -)"; return 0
+  fi
+  if [[ "$new_name" == "$old_name" ]]; then
+    info "Имя не изменилось"; return 0
+  fi
+
+  # Бекап + обновление SERVER_CONF
+  local bak="${SERVER_CONF}.pre_rename.$(date +%s)"
+  cp "$SERVER_CONF" "$bak"
+
+  # Ищем блок [Peer] с нужным PublicKey и обновляем комментарий
+  # Если комментарий есть — заменяем, если нет — добавляем после [Peer]
+  local tmp_conf
+  tmp_conf=$(mktemp)
+  awk -v pk="$pk" -v new_name="$new_name" '
+    BEGIN { in_peer=0; peer_buf=""; has_comment=0 }
+    /^\[Peer\]/ {
+      # Сохраняем предыдущий peer блок если был
+      if (in_peer && peer_buf != "") {
+        printf "%s", peer_buf
+      }
+      in_peer=1
+      peer_buf=$0 "\n"
+      has_comment=0
+      next
+    }
+    in_peer {
+      peer_buf = peer_buf $0 "\n"
+      if ($0 ~ /^#[[:space:]]/) has_comment=1
+      if ($0 ~ /^PublicKey[[:space:]]*=[[:space:]]*/) {
+        # Нашли PublicKey — проверяем совпадение
+        line_pk=$0
+        sub(/^PublicKey[[:space:]]*=[[:space:]]*/, "", line_pk)
+        gsub(/[[:space:]]/, "", line_pk)
+        tgt=pk
+        gsub(/[[:space:]]/, "", tgt)
+        if (line_pk == tgt) {
+          # Обновляем комментарий в peer_buf
+          if (has_comment) {
+            # Заменяем существующий # ...
+            gsub(/\n#[[:space:]][^\n]*\n/, "\n# " new_name "\n", peer_buf)
+          } else {
+            # Добавляем # new_name после [Peer]
+            sub(/\[Peer\]\n/, "[Peer]\n# " new_name "\n", peer_buf)
+          }
+        }
+      }
+      next
+    }
+    { print }
+    END {
+      if (in_peer && peer_buf != "") printf "%s", peer_buf
+    }
+  ' "$SERVER_CONF" > "$tmp_conf"
+
+  if [[ ! -s "$tmp_conf" ]]; then
+    err "awk не смог обработать конфиг, восстанавливаю из бекапа"
+    mv "$bak" "$SERVER_CONF"
+    rm -f "$tmp_conf"
+    return 1
+  fi
+
+  mv "$tmp_conf" "$SERVER_CONF"
+  chmod 600 "$SERVER_CONF"
+
+  # Переименование файла клиента если он существует
+  local old_file="/root/${old_name}_awg2.conf"
+  local new_file="/root/${new_name}_awg2.conf"
+  if [[ -f "$old_file" && "$old_name" != "безымянный" ]]; then
+    mv "$old_file" "$new_file"
+    ok "Файл переименован: $(basename "$old_file") → $(basename "$new_file")"
+  fi
+
+  ok "Клиент переименован: $old_name → $new_name"
+  info "Бекап конфига: $bak"
+}
+
+# ── Удаление клиента ──
+do_delete_client() {
+  _mgmt_scan_clients || { warn "Нет клиентов для удаления"; return 0; }
+  hdr "🗑  Удалить клиента"
+  _mgmt_print_list
+
+  local SEL
+  read -rp "$(echo -e "${C}  Номер клиента [1-${#MGMT_PUBKEYS[@]}] (0 = отмена): ${N}")" SEL
+  [[ "$SEL" == "0" || -z "$SEL" ]] && { info "Отменено"; return 0; }
+  if ! [[ "$SEL" =~ ^[0-9]+$ ]] || (( SEL < 1 || SEL > ${#MGMT_PUBKEYS[@]} )); then
+    warn "Неверный номер"; return 0
+  fi
+
+  local idx=$((SEL - 1))
+  local del_name="${MGMT_NAMES[$idx]}"
+  local del_pk="${MGMT_PUBKEYS[$idx]}"
+  local del_ip="${MGMT_IPS[$idx]}"
+
+  echo ""
+  echo -e "${Y}  ▲ Будет удалён клиент:${N}"
+  echo -e "     Имя: ${W}$del_name${N}"
+  echo -e "     IP : ${W}$del_ip${N}"
+  echo -e "     Ключ: ${D}${del_pk:0:20}...${N}"
+  echo ""
+  local CONFIRM
+  read -rp "$(echo -e "${R}  Подтвердить удаление? [y/N]: ${N}")" CONFIRM
+  [[ ! "$CONFIRM" =~ ^[Yy]$ ]] && { info "Отменено"; return 0; }
+
+  # Бекап
+  local bak="${SERVER_CONF}.pre_delete.$(date +%s)"
+  cp "$SERVER_CONF" "$bak"
+
+  # Удаляем peer из runtime
+  awg set awg0 peer "$del_pk" remove 2>/dev/null || warn "Не удалось удалить peer из runtime"
+
+  # Удаляем блок [Peer] из SERVER_CONF через awk
+  # Стратегия: буферизуем каждый [Peer] блок целиком, печатаем только если его PublicKey != del_pk
+  local tmp_conf
+  tmp_conf=$(mktemp)
+  awk -v pk="$del_pk" '
+    BEGIN { in_peer=0; peer_buf=""; match_pk=0 }
+    /^\[Peer\]/ {
+      # Печатаем предыдущий peer если он не удаляется
+      if (in_peer && !match_pk) printf "%s", peer_buf
+      in_peer=1
+      peer_buf=$0 "\n"
+      match_pk=0
+      next
+    }
+    in_peer {
+      peer_buf = peer_buf $0 "\n"
+      if ($0 ~ /^PublicKey[[:space:]]*=[[:space:]]*/) {
+        line_pk=$0
+        sub(/^PublicKey[[:space:]]*=[[:space:]]*/, "", line_pk)
+        gsub(/[[:space:]]/, "", line_pk)
+        tgt=pk
+        gsub(/[[:space:]]/, "", tgt)
+        if (line_pk == tgt) match_pk=1
+      }
+      next
+    }
+    { print }
+    END {
+      if (in_peer && !match_pk) printf "%s", peer_buf
+    }
+  ' "$SERVER_CONF" > "$tmp_conf"
+
+  if [[ ! -s "$tmp_conf" ]]; then
+    err "awk не смог обработать конфиг, восстанавливаю из бекапа"
+    mv "$bak" "$SERVER_CONF"
+    rm -f "$tmp_conf"
+    return 1
+  fi
+
+  mv "$tmp_conf" "$SERVER_CONF"
+  chmod 600 "$SERVER_CONF"
+
+  # Удаляем файл клиента
+  local del_file="/root/${del_name}_awg2.conf"
+  if [[ -f "$del_file" && "$del_name" != "безымянный" ]]; then
+    rm -f "$del_file"
+    ok "Файл удалён: $(basename "$del_file")"
+  fi
+
+  ok "Клиент удалён: $del_name ($del_ip)"
+  info "Бекап конфига: $bak"
+}
+
+# ══════════════════════════════════════════════════════════
+# 3a. ДОБАВИТЬ КЛИЕНТА
 # ══════════════════════════════════════════════════════════
 do_add_client() {
   [[ ! -f "$SERVER_CONF" ]] && { warn "Конфиг сервера не найден. Сначала пункт 2 — возврат в главное меню"; return 0; }
@@ -2555,20 +2860,39 @@ do_uninstall() {
 do_check_domains() {
   echo ""
   hdr "◎  Проверка доступности доменов для мимикрии"
+
+  # Показываем текущий регион и какие пулы будут проверены
+  local region_label
+  case "${SERVER_REGION:-world}" in
+    ru)    region_label="🇷🇺 РФ (российский сегмент)" ;;
+    world) region_label="🌍 Мир/Европа" ;;
+    *)     region_label="🌍 Мир (по умолчанию)" ;;
+  esac
+  echo -e "  ${C}Регион :${N} ${W}${region_label}${N}"
+  echo -e "  ${C}Пулы   :${N} ${W}TLS · DTLS · SIP · QUIC${N}"
+  echo -e "  ${D}(выбирается при создании сервера, пункт 2)${N}"
   echo ""
 
   local cache_file="/tmp/awg_domain_cache.txt"
   local ts
   ts=$(date '+%Y-%m-%d %H:%M:%S')
 
-  # ── Пулы доменов (порядок важен — индексы используются ниже) ──
-  local tls_domains=(yandex.ru vk.com mail.ru ozon.ru wildberries.ru sberbank.ru tbank.ru gosuslugi.ru github.com google.com)
-  local tls_ch_domains=(yandex.ru vk.com mail.ru github.com gitlab.com microsoft.com apple.com stackoverflow.com)
-  local dtls_domains=(stun.yandex.net stun.vk.com stun.mail.ru meet.jit.si stun.stunprotocol.org)
-  local sip_domains=(sip.beeline.ru sip.mts.ru sip.yandex.ru sip.iptel.org)
+  # ── Выбираем пулы в зависимости от региона ──
+  local -a tls_pool dtls_pool sip_pool quic_pool
+  if [[ "${SERVER_REGION:-world}" == "ru" ]]; then
+    tls_pool=("${TLS_DOMAINS_RU[@]}")
+    dtls_pool=("${DTLS_DOMAINS_RU[@]}")
+    sip_pool=("${SIP_DOMAINS_RU[@]}")
+    quic_pool=("${QUIC_DOMAINS_RU[@]}")
+  else
+    tls_pool=("${TLS_DOMAINS_WORLD[@]}")
+    dtls_pool=("${DTLS_DOMAINS_WORLD[@]}")
+    sip_pool=("${SIP_DOMAINS_WORLD[@]}")
+    quic_pool=("${QUIC_DOMAINS_WORLD[@]}")
+  fi
 
   # Объединяем для одного параллельного пинга
-  local all_domains=("${tls_domains[@]}" "${tls_ch_domains[@]}" "${dtls_domains[@]}" "${sip_domains[@]}")
+  local all_domains=("${tls_pool[@]}" "${dtls_pool[@]}" "${sip_pool[@]}" "${quic_pool[@]}")
   local total=${#all_domains[@]}
   local avail_count=0
   local tmpdir="/tmp/awg_ping_$$"
@@ -2578,10 +2902,11 @@ do_check_domains() {
   trap 'rm -rf "$tmpdir"; exit 1' INT TERM
 
   # Параллельный пинг всех доменов
+  local domain
   for domain in "${all_domains[@]}"; do
     (timeout 2 ping -c 1 -W 1 "$domain" &>/dev/null 2>&1 && echo "ok" || echo "fail") > "$tmpdir/${domain//./_}" &
   done
-  wait  # Ждём все
+  wait
 
   # Хелпер: прочитать результат пинга одного домена
   _ping_result() {
@@ -2610,24 +2935,24 @@ do_check_domains() {
 
   : > "$cache_file"
 
-  # --- TLS / General ---
-  echo -e "${C}  ◎ TLS / General домены:${N}"
-  _check_pool "TLS" "tls" "${tls_domains[@]}"
-
-  # --- TLS 1.3 Client Hello ---
-  echo ""
-  echo -e "${C}  ◎ TLS 1.3 Client Hello (HTTPS):${N}"
-  _check_pool "TLS 1.3 Client Hello" "tls_ch" "${tls_ch_domains[@]}"
+  # --- TLS ---
+  echo -e "${C}  ◎ TLS 1.3 (${#tls_pool[@]} доменов):${N}"
+  _check_pool "TLS" "tls" "${tls_pool[@]}"
 
   # --- DTLS ---
   echo ""
-  echo -e "${C}  ◎ DTLS (WebRTC/STUN):${N}"
-  _check_pool "DTLS" "dtls" "${dtls_domains[@]}"
+  echo -e "${C}  ◎ DTLS / STUN (${#dtls_pool[@]} доменов):${N}"
+  _check_pool "DTLS" "dtls" "${dtls_pool[@]}"
 
   # --- SIP ---
   echo ""
-  echo -e "${C}  ◎ SIP (VoIP):${N}"
-  _check_pool "SIP" "sip" "${sip_domains[@]}"
+  echo -e "${C}  ◎ SIP (${#sip_pool[@]} доменов):${N}"
+  _check_pool "SIP" "sip" "${sip_pool[@]}"
+
+  # --- QUIC / HTTP3 ---
+  echo ""
+  echo -e "${C}  ◎ QUIC / HTTP3 (${#quic_pool[@]} доменов):${N}"
+  _check_pool "QUIC" "quic" "${quic_pool[@]}"
 
   # Cleanup
   rm -rf "$tmpdir"
@@ -2635,6 +2960,7 @@ do_check_domains() {
 
   echo ""
   hdr "∑  Результат проверки"
+  echo -e "${C}  Регион   : ${W}${region_label}${N}"
   echo -e "${G}  √ Доступно: $avail_count из $total доменов${N}"
   echo -e "${C}  → Кэш сохранён: $cache_file${N}"
 
@@ -2886,7 +3212,7 @@ AWG_PARAMS_LINES=""
 ERROR_COUNT=0
 
 touch "$LOG_FILE" 2>/dev/null && chmod 600 "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/awg-manager.log"
-log_info "=== AWG Toolza v5.2 запущен ==="
+log_info "=== AWG Toolza v5.3 запущен ==="
 
 # Trap EXIT — cleanup временных файлов
 trap 'rm -rf /tmp/awg_tmp_* /tmp/awg_ping_* 2>/dev/null || true' EXIT
@@ -2900,7 +3226,7 @@ while true; do
   case "${CHOICE:-}" in
     1) do_install ;;
     2) do_gen ;;
-    3) do_add_client ;;
+    3) do_manage_clients ;;
     4) do_list_clients ;;
     5) do_show_qr ;;
     6) do_restart ;;
@@ -2911,7 +3237,7 @@ while true; do
    11) do_restore ;;
    12) do_sniff_test ;;
     0) log_info "Выход"
-       echo -e "\n${G}  TG - https://t.me/awgToolza ${N}"
+       echo -e "\n${G}  В путь! ${N}"
        echo -e "\n▓▒░ DPI ОТСТОЙ! ░▒▓"
        echo -e "<< НЕТ КОНТРОЛЮ! >>"
        echo -e "<< VIVAT СВОБОДНЫЙ ИНТЕРНЕТ!!! >>\n"
