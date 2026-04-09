@@ -402,14 +402,7 @@ H4 ∈ Q3 [3221225470 .. 4294967292]
 
 <br>
 
-▓▒░ **DPI ОТСТОЙ!** ░▒▓<br>
-**VIVAT СВОБОДНЫЙ ИНТЕРНЕТ!**
-
-<br>
-
 *Сообщество [AWG-Toolza](https://t.me/awgToolza)*
-
-
 **AmneziaWG Toolza v5.4** · MIT License
 
 </div>
