@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="v5.3"
+VERSION="v5.4"
 
 # ─────────────────────────────────────────────────────────────
 # - AmneziaWG Toolza — только AWG 2.0
@@ -1513,6 +1513,7 @@ show_header() {
 show_menu() {
   echo ""
 
+  # === ОСНОВНЫЕ ===
   # Пункт 1 — всегда доступен
   echo -e "  ${W}◇  1)${N} Установка зависимостей и AmneziaWG"
 
@@ -1523,65 +1524,66 @@ show_menu() {
     echo -e "  ${D}◇  2)${N} Создать сервер ${D}(нужен пункт 1)${N}"
   fi
 
-  # Пункт 3 — нужен awg + конфиг сервера
+  # Пункт 3 — sub-меню управления клиентами
   if $HAS_AWG && $HAS_SERVER_CONF; then
-    echo -e "  ${W}◇  3)${N} Управление клиентами (добавить/переименовать/удалить)"
+    echo -e "  ${W}◇  3)${N} Управление клиентами (добавить/rename/delete/QR)"
   else
     echo -e "  ${D}◇  3)${N} Управление клиентами ${D}(нужен пункт 2)${N}"
   fi
 
-  # Пункт 4 — нужен awg + конфиг сервера
+  # Пункт 4 — быстрый доступ к списку клиентов
   if $HAS_AWG && $HAS_SERVER_CONF; then
     echo -e "  ${W}◇  4)${N} Показать клиентов"
   else
     echo -e "  ${D}◇  4)${N} Показать клиентов ${D}(нужен пункт 2)${N}"
   fi
 
-  # Пункт 5 — нужен qrencode + конфиги клиентов
-  if $HAS_QRENCODE && $HAS_CLIENT_CONFS; then
-    echo -e "  ${W}◇  5)${N} Показать QR клиента"
-  elif ! $HAS_CLIENT_CONFS; then
-    echo -e "  ${D}◇  5)${N} Показать QR клиента ${D}(нет клиентов)${N}"
-  else
-    echo -e "  ${D}◇  5)${N} Показать QR клиента ${D}(нужен qrencode)${N}"
-  fi
-
-  # Пункт 6 — нужен конфиг сервера
+  # === УТИЛИТЫ ===
+  # Пункт 5 — перезапуск awg0
   if $HAS_SERVER_CONF; then
-    echo -e "  ${W}◇  6)${N} Перезапустить awg0"
+    echo -e "  ${W}◇  5)${N} Перезапустить awg0"
   else
-    echo -e "  ${D}◇  6)${N} Перезапустить awg0 ${D}(нужен пункт 2)${N}"
+    echo -e "  ${D}◇  5)${N} Перезапустить awg0 ${D}(нужен пункт 2)${N}"
   fi
 
-  # Пункт 7 — всегда доступен
-  echo -e "  ${W}◇  7)${N} Удалить всё"
+  # Пункт 6 — проверка доменов
+  echo -e "  ${W}◇  6)${N} Проверить домены из пулов (ping)"
 
-  # Пункт 8 — всегда доступен
-  echo -e "  ${W}◇  8)${N} Проверить домены из пулов (ping)"
-
-  # Пункт 9 — нужен конфиг сервера
+  # Пункт 7 — DPI тест
   if $HAS_SERVER_CONF; then
-    echo -e "  ${W}◇  9)${N} Очистить всех клиентов (без удаления сервера)"
+    echo -e "  ${W}◇  7)${N} Тест DPI мимикрии (захват CPS пакета)"
   else
-    echo -e "  ${D}◇  9)${N} Очистить клиентов ${D}(нужен пункт 2)${N}"
+    echo -e "  ${D}◇  7)${N} Тест DPI мимикрии ${D}(нужен пункт 2)${N}"
   fi
 
-  # Пункт 10 — всегда доступен
-  echo -e "  ${Y}◆ 10)${N} Создать бекап (~/awg_backup/)"
+  # === БЕКАПЫ ===
+  # Пункт 8 — создать бекап
+  echo -e "  ${Y}◆  8)${N} Создать бекап (~/awg_backup/)"
 
-  # Пункт 11 — нужны бекапы
+  # Пункт 9 — восстановить
   if $HAS_BACKUPS; then
-    echo -e "  ${Y}◆ 11)${N} Восстановить из бекапа"
+    echo -e "  ${Y}◆  9)${N} Восстановить из бекапа"
   else
-    echo -e "  ${D}◇ 11)${N} Восстановить из бекапа ${D}(нет бекапов)${N}"
+    echo -e "  ${D}◇  9)${N} Восстановить из бекапа ${D}(нет бекапов)${N}"
   fi
 
-  # Пункт 12 — нужен сервер + tcpdump
+  # === ОПАСНАЯ ЗОНА ===
+  # Пункт 10 — очистить клиентов
   if $HAS_SERVER_CONF; then
-    echo -e "  ${W}◇ 12)${N} Тест DPI мимикрии (захват CPS пакета)"
+    echo -e "  ${Y}◇ 10)${N} Очистить всех клиентов (без удаления сервера)"
   else
-    echo -e "  ${D}◇ 12)${N} Тест DPI мимикрии ${D}(нужен пункт 2)${N}"
+    echo -e "  ${D}◇ 10)${N} Очистить клиентов ${D}(нужен пункт 2)${N}"
   fi
+
+  # Пункт 11 — сбросить сервер
+  if $HAS_SERVER_CONF; then
+    echo -e "  ${Y}◇ 11)${N} Сбросить настройки сервера (чистая переустановка)"
+  else
+    echo -e "  ${D}◇ 11)${N} Сбросить сервер ${D}(нет сервера)${N}"
+  fi
+
+  # Пункт 12 — удалить всё
+  echo -e "  ${R}◇ 12)${N} Удалить всё (пакеты + конфиги)"
 
   echo -e "  ${W}   0)${N} Выход"
   echo ""
@@ -2181,14 +2183,16 @@ do_manage_clients() {
     echo -e "  ${G}1)${N} Добавить клиента"
     echo -e "  ${G}2)${N} Переименовать клиента"
     echo -e "  ${R}3)${N} Удалить клиента"
+    echo -e "  ${C}4)${N} Показать QR клиента"
     echo -e "  ${W}0)${N} Назад в главное меню"
     echo ""
     local MGMT_CHOICE
-    read -rp "$(echo -e "${C}  Выбор [0-3]: ${N}")" MGMT_CHOICE
+    read -rp "$(echo -e "${C}  Выбор [0-4]: ${N}")" MGMT_CHOICE
     case "${MGMT_CHOICE:-}" in
       1) do_add_client ;;
       2) do_rename_client ;;
       3) do_delete_client ;;
+      4) do_show_qr ;;
       0) return 0 ;;
       *) warn "Неверный выбор" ;;
     esac
@@ -2806,7 +2810,117 @@ do_restart() {
 }
 
 # ══════════════════════════════════════════════════════════
-# 7. УДАЛИТЬ ВСЁ
+# ══════════════════════════════════════════════════════════
+# 10. СБРОС СЕРВЕРА (чистая переустановка)
+# ══════════════════════════════════════════════════════════
+# Удаляет конфиги и правила firewall, но НЕ трогает пакеты/бинарники.
+# После сброса можно сразу пункт 2 — создать новый сервер.
+do_reset_server() {
+  echo ""
+  hdr "↺  Сброс настроек сервера (чистая переустановка)"
+  echo ""
+  warn "Будет удалено:"
+  echo -e "  ${R}—${N} Интерфейс awg0 (awg-quick down)"
+  echo -e "  ${R}—${N} Серверный конфиг: ${W}$SERVER_CONF${N}"
+  echo -e "  ${R}—${N} Все клиентские конфиги: ${W}/root/*_awg2.conf${N}"
+  echo -e "  ${R}—${N} UFW правила AmneziaWG"
+  echo -e "  ${R}—${N} iptables правила NAT/FORWARD для awg0"
+  echo ""
+  echo -e "${G}  Сохраняется:${N}"
+  echo -e "  ${G}✓${N} Пакеты amneziawg, amneziawg-tools"
+  echo -e "  ${G}✓${N} Kernel module"
+  echo -e "  ${G}✓${N} Лог /var/log/awg-Toolza.log"
+  echo -e "  ${G}✓${N} Бекапы в ~/awg_backup/"
+  echo ""
+  echo -e "${C}  После сброса можно сразу пункт 2 — создать новый сервер.${N}"
+  echo ""
+
+  local CONFIRM_RST
+  read -rp "$(echo -e "${R}  Подтверди сброс [yes/N]: ${N}")" CONFIRM_RST
+  if [[ "$CONFIRM_RST" != "yes" ]]; then
+    warn "Отменено."
+    return 0
+  fi
+
+  # Предложение бекапа
+  if [[ -f "$SERVER_CONF" ]]; then
+    echo ""
+    local CONFIRM_BAK
+    read -rp "$(echo -e "${C}  Создать бекап перед сбросом? [Y/n]: ${N}")" CONFIRM_BAK
+    CONFIRM_BAK=${CONFIRM_BAK:-y}
+    if [[ "$CONFIRM_BAK" =~ ^[Yy]$ ]]; then
+      info "Создаём бекап..."
+      if do_backup; then
+        ok "Бекап создан — можно восстановить через пункт 8"
+      else
+        warn "Бекап не удался — продолжаем сброс"
+      fi
+      echo ""
+    fi
+  fi
+
+  # === Сброс ===
+  trash "Останавливаем awg0..."
+  awg-quick down "$SERVER_CONF" 2>/dev/null || \
+    ip link delete dev awg0 2>/dev/null || true
+
+  # Убираем iptables правила явно — PostDown мог не отработать
+  trash "Очищаем iptables NAT/FORWARD..."
+  # Вытаскиваем CLIENT_NET из конфига пока он ещё есть
+  local client_net=""
+  if [[ -f "$SERVER_CONF" ]]; then
+    local srv_addr
+    srv_addr=$(grep "^Address = " "$SERVER_CONF" | head -1 | awk -F'= ' '{print $2}' | tr -d ' ' || true)
+    if [[ -n "$srv_addr" ]]; then
+      # 10.45.12.1/24 → 10.45.12.0/24
+      local base
+      base=$(echo "$srv_addr" | cut -d/ -f1 | awk -F. '{printf "%s.%s.%s.0", $1, $2, $3}')
+      client_net="${base}/24"
+    fi
+  fi
+  local iface
+  iface=$(ip route | awk '/default/{print $5; exit}')
+  if [[ -n "$client_net" && -n "$iface" ]]; then
+    iptables -t nat -D POSTROUTING -s "$client_net" -o "$iface" -j MASQUERADE 2>/dev/null || true
+  fi
+  iptables -D FORWARD -i awg0 -j ACCEPT 2>/dev/null || true
+  iptables -D FORWARD -o awg0 -j ACCEPT 2>/dev/null || true
+
+  trash "Удаляем серверный конфиг..."
+  rm -f "$SERVER_CONF" 2>/dev/null || true
+  # Также снимаем все .bak файлы рядом чтобы избежать путаницы при восстановлении
+  rm -f "${SERVER_CONF}".bak.* 2>/dev/null || true
+  rm -f "${SERVER_CONF}".pre_rename.* 2>/dev/null || true
+  rm -f "${SERVER_CONF}".pre_delete.* 2>/dev/null || true
+
+  trash "Удаляем клиентские конфиги..."
+  rm -f /root/*_awg2.conf 2>/dev/null || true
+
+  trash "Удаляем UFW правила..."
+  if command -v ufw &>/dev/null; then
+    local rule_nums
+    rule_nums=$(ufw status numbered 2>/dev/null | grep -i "AmneziaWG" | grep -oE '\[[0-9]+\]' | tr -d '[]' | sort -rn)
+    for num in $rule_nums; do
+      echo "y" | ufw --force delete "$num" 2>/dev/null || true
+    done
+  fi
+
+  # Сброс кеша доменов (опционально)
+  rm -f /tmp/awg_domain_cache.txt 2>/dev/null || true
+
+  # Сброс SERVER_REGION к дефолту — конфига больше нет
+  SERVER_REGION="world"
+
+  echo ""
+  hdr "√ Сервер сброшен"
+  echo -e "${G}  Конфиги удалены, пакеты сохранены${N}"
+  echo -e "${C}  Теперь можно пункт 2 — создать новый сервер${N}"
+  echo ""
+  log_info "do_reset_server: сброс выполнен"
+}
+
+# ══════════════════════════════════════════════════════════
+# 11. УДАЛИТЬ ВСЁ
 # ══════════════════════════════════════════════════════════
 do_uninstall() {
   echo ""
@@ -3212,7 +3326,7 @@ AWG_PARAMS_LINES=""
 ERROR_COUNT=0
 
 touch "$LOG_FILE" 2>/dev/null && chmod 600 "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/awg-manager.log"
-log_info "=== AWG Toolza v5.3 запущен ==="
+log_info "=== AWG Toolza v5.4 запущен ==="
 
 # Trap EXIT — cleanup временных файлов
 trap 'rm -rf /tmp/awg_tmp_* /tmp/awg_ping_* 2>/dev/null || true' EXIT
@@ -3224,24 +3338,24 @@ while true; do
   # show_menu уже читает CHOICE, дополнительный read не нужен
 
   case "${CHOICE:-}" in
-    1) do_install ;;
-    2) do_gen ;;
-    3) do_manage_clients ;;
-    4) do_list_clients ;;
-    5) do_show_qr ;;
-    6) do_restart ;;
-    7) do_uninstall ;;
-    8) do_check_domains ;;
-    9) do_clean_clients ;;
-   10) do_backup ;;
-   11) do_restore ;;
-   12) do_sniff_test ;;
-    0) log_info "Выход"
-       echo -e "\n${G}  В путь! ${N}"
-       echo -e "\n▓▒░ DPI ОТСТОЙ! ░▒▓"
-       echo -e "<< НЕТ КОНТРОЛЮ! >>"
-       echo -e "<< VIVAT СВОБОДНЫЙ ИНТЕРНЕТ!!! >>\n"
-       exit 0 ;;
+    1)  do_install ;;
+    2)  do_gen ;;
+    3)  do_manage_clients ;;
+    4)  do_list_clients ;;
+    5)  do_restart ;;
+    6)  do_check_domains ;;
+    7)  do_sniff_test ;;
+    8)  do_backup ;;
+    9)  do_restore ;;
+    10) do_clean_clients ;;
+    11) do_reset_server ;;
+    12) do_uninstall ;;
+    0)  log_info "Выход"
+        echo -e "\n${G}  В путь! ${N}"
+        echo -e "\n▓▒░ DPI ОТСТОЙ! ░▒▓"
+        echo -e "<< НЕТ КОНТРОЛЮ! >>"
+        echo -e "<< VIVAT СВОБОДНЫЙ ИНТЕРНЕТ!!! >>\n"
+        exit 0 ;;
     *)
       warn "Неверный выбор"
       ERROR_COUNT=$((ERROR_COUNT + 1))
