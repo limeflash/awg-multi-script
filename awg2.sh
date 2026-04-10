@@ -2471,8 +2471,73 @@ do_add_client() {
       [[ -z "$i1_line" ]] && info "I1 не найден в конфиге сервера (уровень = базовый)" || true
       ;;
     2)
+      # ─── Per-client выбор пула доменов (RU vs World) ─────────
+      # Позволяет сгенерировать мимикрию из другого регионального
+      # пула чем у сервера. Не трогает серверное состояние —
+      # только подменяет массивы на время вызова
+      # choose_mimicry_profile, затем восстанавливает.
+      echo ""
+      hdr "◎  Пул доменов мимикрии для клиента"
+      local srv_region_label
+      case "${SERVER_REGION:-world}" in
+        ru)    srv_region_label="🇷🇺 РФ" ;;
+        *)     srv_region_label="🌍 Мир/Европа" ;;
+      esac
+      echo -e "  ${G}1${N}  Как у сервера (${srv_region_label})"
+      echo -e "  ${G}2${N}  🌍 Европа / Мир — WORLD домены"
+      echo -e "  ${G}3${N}  🇷🇺 Россия — RU домены"
+      echo -e "${B}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+      local CLIENT_REGION_CHOICE
+      read -rp "$(echo -e "${C}  Выбор [1-3] (Enter = 1): ${N}")" CLIENT_REGION_CHOICE
+      CLIENT_REGION_CHOICE=${CLIENT_REGION_CHOICE:-1}
+
+      # Сохраняем текущее состояние пулов для восстановления.
+      # Паттерн ${arr[@]+"${arr[@]}"} защищает от set -u при пустых массивах.
+      local SAVED_REGION="${SERVER_REGION:-world}"
+      local -a SAVED_TLS SAVED_DTLS SAVED_SIP SAVED_QUIC
+      SAVED_TLS=("${TLS_CLIENT_HELLO_DOMAINS[@]+"${TLS_CLIENT_HELLO_DOMAINS[@]}"}")
+      SAVED_DTLS=("${DTLS_DOMAINS[@]+"${DTLS_DOMAINS[@]}"}")
+      SAVED_SIP=("${SIP_DOMAINS[@]+"${SIP_DOMAINS[@]}"}")
+      SAVED_QUIC=("${QUIC_DOMAINS[@]+"${QUIC_DOMAINS[@]}"}")
+
+      case $CLIENT_REGION_CHOICE in
+        2)
+          SERVER_REGION="world"
+          TLS_CLIENT_HELLO_DOMAINS=("${TLS_DOMAINS_WORLD[@]}")
+          DTLS_DOMAINS=("${DTLS_DOMAINS_WORLD[@]}")
+          SIP_DOMAINS=("${SIP_DOMAINS_WORLD[@]}")
+          QUIC_DOMAINS=("${QUIC_DOMAINS_WORLD[@]}")
+          echo -e "${G}  √ Пул клиента: Европа / Мир${N}"
+          ;;
+        3)
+          SERVER_REGION="ru"
+          TLS_CLIENT_HELLO_DOMAINS=("${TLS_DOMAINS_RU[@]}")
+          DTLS_DOMAINS=("${DTLS_DOMAINS_RU[@]}")
+          SIP_DOMAINS=("${SIP_DOMAINS_RU[@]}")
+          QUIC_DOMAINS=("${QUIC_DOMAINS_RU[@]}")
+          echo -e "${G}  √ Пул клиента: Россия (RU)${N}"
+          ;;
+        *)
+          echo -e "${G}  √ Пул клиента: как у сервера (${srv_region_label})${N}"
+          ;;
+      esac
+
       choose_obf_level
-      choose_mimicry_profile
+      local MIMICRY_RC=0
+      choose_mimicry_profile || MIMICRY_RC=$?
+
+      # Всегда восстанавливаем серверное состояние — даже при ошибке
+      SERVER_REGION="$SAVED_REGION"
+      TLS_CLIENT_HELLO_DOMAINS=("${SAVED_TLS[@]+"${SAVED_TLS[@]}"}")
+      DTLS_DOMAINS=("${SAVED_DTLS[@]+"${SAVED_DTLS[@]}"}")
+      SIP_DOMAINS=("${SAVED_SIP[@]+"${SAVED_SIP[@]}"}")
+      QUIC_DOMAINS=("${SAVED_QUIC[@]+"${SAVED_QUIC[@]}"}")
+
+      if [[ $MIMICRY_RC -ne 0 ]]; then
+        warn "Мимикрия не сгенерирована — возврат в меню"
+        return 0
+      fi
+
       [[ -n "$I1" ]] && i1_line="I1 = $I1" || i1_line=""
       [[ -n "$I2" ]] && i2_line="I2 = $I2" || i2_line=""
       [[ -n "$I3" ]] && i3_line="I3 = $I3" || i3_line=""
